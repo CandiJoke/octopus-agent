@@ -7,6 +7,7 @@ import json
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain.agents import create_agent as create_langchain_agent
 from langchain_openai import ChatOpenAI
@@ -23,6 +24,15 @@ from tools import tools
 load_app_env()  # 自动从 .env 读 OPENAI_API_KEY / OPENAI_BASE_URL
 
 app = FastAPI(title="Agent Hub")
+
+# 允许前端跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:5175"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # ========== 请求/响应模型 ==========
@@ -135,4 +145,4 @@ def health():
 # ========== 启动说明 ==========
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
