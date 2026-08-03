@@ -5,6 +5,7 @@ Agent HTTP 服务 —— 把 Agent 变成 API
 """
 import json
 import time
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -12,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain.agents import create_agent as create_langchain_agent
 from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from pydantic import BaseModel
 
 from agent_console import (
@@ -121,6 +123,20 @@ def done_event() -> str:
     return "data: [DONE]\n\n"
 
 
+@asynccontextmanager
+async def stream_agent_context(stream_agent=None):
+    if stream_agent is not None:
+        yield stream_agent
+        return
+
+    async with AsyncSqliteSaver.from_conn_string(str(DB_PATH)) as async_checkpointer:
+        yield create_langchain_agent(
+            llm,
+            tools=tools,
+            checkpointer=async_checkpointer,
+        )
+
+
 # ========== API 接口 ==========
 
 @app.post("/chat", response_model=ChatResponse)
@@ -159,57 +175,57 @@ def chat(req: ChatRequest):
 
 
 async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterator[str]:
-    active_agent = stream_agent or agent
     config = {"configurable": {"thread_id": req.session_id}}
     tool_started_at: dict[str, float] = {}
     answer_started = False
 
-    yield stream_event(make_stage_event("received", "已收到问题"))
-    yield stream_event(make_stage_event("planning", "正在判断是否需要工具"))
-
     try:
-        async for event in active_agent.astream_events(
-            {"messages": [("user", req.message)]},
-            config=config,
-            version="v2",
-        ):
-            kind = event.get("event", "")
+        async with stream_agent_context(stream_agent) as active_agent:
+            yield stream_event(make_stage_event("received", "已收到问题"))
+            yield stream_event(make_stage_event("planning", "正在判断是否需要工具"))
 
-            if kind == "on_tool_start":
-                tool_name = event["name"]
-                tool_started_at[tool_name] = time.perf_counter()
-                yield stream_event(make_stage_event("tooling", f"正在调用 {tool_name}"))
-                yield stream_event(
-                    make_tool_start_event(
-                        tool_name,
-                        event["data"].get("input", ""),
+            async for event in active_agent.astream_events(
+                {"messages": [("user", req.message)]},
+                config=config,
+                version="v2",
+            ):
+                kind = event.get("event", "")
+
+                if kind == "on_tool_start":
+                    tool_name = event["name"]
+                    tool_started_at[tool_name] = time.perf_counter()
+                    yield stream_event(make_stage_event("tooling", f"正在调用 {tool_name}"))
+                    yield stream_event(
+                        make_tool_start_event(
+                            tool_name,
+                            event["data"].get("input", ""),
+                        )
                     )
-                )
 
-            elif kind == "on_tool_end":
-                tool_name = event["name"]
-                started_at = tool_started_at.pop(tool_name, None)
-                elapsed_ms = None
-                if started_at is not None:
-                    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
-                yield stream_event(
-                    make_tool_end_event(
-                        tool_name,
-                        event["data"].get("output", ""),
-                        elapsed_ms=elapsed_ms,
+                elif kind == "on_tool_end":
+                    tool_name = event["name"]
+                    started_at = tool_started_at.pop(tool_name, None)
+                    elapsed_ms = None
+                    if started_at is not None:
+                        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+                    yield stream_event(
+                        make_tool_end_event(
+                            tool_name,
+                            event["data"].get("output", ""),
+                            elapsed_ms=elapsed_ms,
+                        )
                     )
-                )
 
-            elif kind == "on_chat_model_stream":
-                chunk = event["data"]["chunk"]
-                content = getattr(chunk, "content", "")
-                if content:
-                    if not answer_started:
-                        answer_started = True
-                        yield stream_event(make_stage_event("answering", "正在整理最终回答"))
-                    yield stream_event(make_text_event(content))
+                elif kind == "on_chat_model_stream":
+                    chunk = event["data"]["chunk"]
+                    content = getattr(chunk, "content", "")
+                    if content:
+                        if not answer_started:
+                            answer_started = True
+                            yield stream_event(make_stage_event("answering", "正在整理最终回答"))
+                        yield stream_event(make_text_event(content))
 
-        yield stream_event(make_stage_event("completed", "已完成"))
+            yield stream_event(make_stage_event("completed", "已完成"))
     except Exception as exc:
         yield stream_event(make_error_event(str(exc)))
     finally:

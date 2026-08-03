@@ -1,6 +1,7 @@
 import json
 import os
 import unittest
+from unittest import mock
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 
@@ -82,6 +83,20 @@ class FakeStreamAgent:
             raise self.error
 
 
+class FakeAsyncSaverContext:
+    def __init__(self, saver):
+        self.saver = saver
+        self.entered = False
+        self.exited = False
+
+    async def __aenter__(self):
+        self.entered = True
+        return self.saver
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        self.exited = True
+
+
 async def collect_stream(req: api_server.ChatRequest, fake_agent: FakeStreamAgent):
     chunks = []
     async for chunk in api_server.stream_chat_events(req, stream_agent=fake_agent):
@@ -98,6 +113,52 @@ def json_chunks(chunks: list[str]) -> list[dict]:
 
 
 class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stream_chat_events_creates_agent_with_async_sqlite_saver(self):
+        async_saver = object()
+        saver_context = FakeAsyncSaverContext(async_saver)
+        stream_agent = FakeStreamAgent(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": FakeChunk("流式回答")},
+                },
+            ]
+        )
+        req = api_server.ChatRequest(message="hello", session_id="async-saver-test")
+
+        with (
+            mock.patch.object(
+                api_server.AsyncSqliteSaver,
+                "from_conn_string",
+                return_value=saver_context,
+            ) as create_saver,
+            mock.patch.object(
+                api_server,
+                "create_langchain_agent",
+                return_value=stream_agent,
+            ) as create_agent,
+        ):
+            chunks = [chunk async for chunk in api_server.stream_chat_events(req)]
+
+        payloads = json_chunks(chunks)
+        self.assertEqual(chunks[-1], api_server.done_event())
+        self.assertEqual(
+            [payload["type"] for payload in payloads],
+            ["stage", "stage", "stage", "text", "stage"],
+        )
+        self.assertEqual(payloads[2]["stage"], "answering")
+        self.assertEqual(payloads[3], {"type": "text", "content": "流式回答"})
+        self.assertEqual(payloads[4]["stage"], "completed")
+        self.assertFalse(any(payload["type"] == "error" for payload in payloads))
+        create_saver.assert_called_once_with(str(api_server.DB_PATH))
+        create_agent.assert_called_once_with(
+            api_server.llm,
+            tools=api_server.tools,
+            checkpointer=async_saver,
+        )
+        self.assertTrue(saver_context.entered)
+        self.assertTrue(saver_context.exited)
+
     async def test_stream_chat_events_emits_stages_tools_text_and_done(self):
         fake_agent = FakeStreamAgent(
             [
