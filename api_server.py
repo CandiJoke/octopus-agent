@@ -4,6 +4,7 @@ Agent HTTP 服务 —— 把 Agent 变成 API
 测试: curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"message":"帮我算 123*456"}'
 """
 import json
+import logging
 import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -24,6 +25,8 @@ from agent_console import (
     selected_model,
 )
 from tools import tools
+
+logger = logging.getLogger(__name__)
 
 load_app_env()  # 自动从 .env 读 OPENAI_API_KEY / OPENAI_BASE_URL
 
@@ -63,6 +66,7 @@ agent = create_langchain_agent(llm, tools=tools, checkpointer=checkpointer)
 
 STREAM_INPUT_LIMIT = 200
 STREAM_OUTPUT_LIMIT = 500
+STREAM_ERROR_MESSAGE = "Agent 运行失败，请稍后重试。"
 
 
 def truncate_stream_value(value: object, limit: int) -> str:
@@ -78,18 +82,26 @@ def make_stage_event(stage: str, message: str) -> dict[str, object]:
     }
 
 
-def make_tool_start_event(tool: str, input_value: object) -> dict[str, object]:
-    return {
+def make_tool_start_event(
+    tool: str,
+    input_value: object,
+    run_id: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
         "type": "tool_start",
         "tool": tool,
         "input": truncate_stream_value(input_value, STREAM_INPUT_LIMIT),
     }
+    if run_id is not None:
+        payload["run_id"] = run_id
+    return payload
 
 
 def make_tool_end_event(
     tool: str,
     output_value: object,
     elapsed_ms: int | None = None,
+    run_id: str | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "type": "tool_end",
@@ -98,6 +110,8 @@ def make_tool_end_event(
     }
     if elapsed_ms is not None:
         payload["elapsed_ms"] = elapsed_ms
+    if run_id is not None:
+        payload["run_id"] = run_id
     return payload
 
 
@@ -179,9 +193,9 @@ async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterat
     tool_started_at: dict[str, float] = {}
     answer_started = False
 
+    yield stream_event(make_stage_event("received", "已收到问题"))
     try:
         async with stream_agent_context(stream_agent) as active_agent:
-            yield stream_event(make_stage_event("received", "已收到问题"))
             yield stream_event(make_stage_event("planning", "正在判断是否需要工具"))
 
             async for event in active_agent.astream_events(
@@ -193,18 +207,25 @@ async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterat
 
                 if kind == "on_tool_start":
                     tool_name = event["name"]
-                    tool_started_at[tool_name] = time.perf_counter()
+                    event_run_id = event.get("run_id")
+                    run_id = str(event_run_id) if event_run_id is not None else None
+                    timing_key = run_id or tool_name
+                    tool_started_at[timing_key] = time.perf_counter()
                     yield stream_event(make_stage_event("tooling", f"正在调用 {tool_name}"))
                     yield stream_event(
                         make_tool_start_event(
                             tool_name,
                             event["data"].get("input", ""),
+                            run_id=run_id,
                         )
                     )
 
                 elif kind == "on_tool_end":
                     tool_name = event["name"]
-                    started_at = tool_started_at.pop(tool_name, None)
+                    event_run_id = event.get("run_id")
+                    run_id = str(event_run_id) if event_run_id is not None else None
+                    timing_key = run_id or tool_name
+                    started_at = tool_started_at.pop(timing_key, None)
                     elapsed_ms = None
                     if started_at is not None:
                         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
@@ -213,6 +234,7 @@ async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterat
                             tool_name,
                             event["data"].get("output", ""),
                             elapsed_ms=elapsed_ms,
+                            run_id=run_id,
                         )
                     )
 
@@ -226,8 +248,9 @@ async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterat
                         yield stream_event(make_text_event(content))
 
             yield stream_event(make_stage_event("completed", "已完成"))
-    except Exception as exc:
-        yield stream_event(make_error_event(str(exc)))
+    except Exception:
+        logger.exception("Chat stream failed")
+        yield stream_event(make_error_event(STREAM_ERROR_MESSAGE))
     finally:
         yield done_event()
 
