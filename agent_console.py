@@ -10,14 +10,22 @@ import openai
 from dotenv import load_dotenv
 from langchain.agents import create_agent as create_langchain_agent
 from langchain_openai import ChatOpenAI
+import sqlite3
+
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 from tools import tools
 
 DEFAULT_MODEL = "deepseek-v4-flash"
 DEFAULT_THREAD_ID = "default"
 DEFAULT_ENV_FILE = Path(__file__).with_name(".env")
-checkpointer = InMemorySaver()
+DB_PATH = Path(__file__).with_name("agent_hub.db")
+
+# SqliteSaver：对话历史持久化到 SQLite，重启不丢失
+# 如果仍要用内存模式（重启即丢），把下面一行换成 InMemorySaver()
+_db_conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+checkpointer = SqliteSaver(_db_conn)
 
 
 def load_app_env(env_path: str | Path = DEFAULT_ENV_FILE) -> bool:

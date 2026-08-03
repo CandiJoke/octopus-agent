@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from agent_console import (
     checkpointer,
+    DB_PATH,
     load_app_env,
     selected_base_url_value,
     selected_model,
