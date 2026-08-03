@@ -58,6 +58,67 @@ llm = ChatOpenAI(
 
 agent = create_langchain_agent(llm, tools=tools, checkpointer=checkpointer)
 
+STREAM_INPUT_LIMIT = 200
+STREAM_OUTPUT_LIMIT = 500
+
+
+def truncate_stream_value(value: object, limit: int) -> str:
+    text = str(value)
+    return text if len(text) <= limit else text[:limit]
+
+
+def make_stage_event(stage: str, message: str) -> dict[str, object]:
+    return {
+        "type": "stage",
+        "stage": stage,
+        "message": message,
+    }
+
+
+def make_tool_start_event(tool: str, input_value: object) -> dict[str, object]:
+    return {
+        "type": "tool_start",
+        "tool": tool,
+        "input": truncate_stream_value(input_value, STREAM_INPUT_LIMIT),
+    }
+
+
+def make_tool_end_event(
+    tool: str,
+    output_value: object,
+    elapsed_ms: int | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "type": "tool_end",
+        "tool": tool,
+        "output": truncate_stream_value(output_value, STREAM_OUTPUT_LIMIT),
+    }
+    if elapsed_ms is not None:
+        payload["elapsed_ms"] = elapsed_ms
+    return payload
+
+
+def make_text_event(content: str) -> dict[str, object]:
+    return {
+        "type": "text",
+        "content": content,
+    }
+
+
+def make_error_event(message: str) -> dict[str, object]:
+    return {
+        "type": "error",
+        "message": message,
+    }
+
+
+def stream_event(payload: dict[str, object]) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+def done_event() -> str:
+    return "data: [DONE]\n\n"
+
 
 # ========== API 接口 ==========
 
