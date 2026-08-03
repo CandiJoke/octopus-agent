@@ -4,6 +4,7 @@ Agent HTTP 服务 —— 把 Agent 变成 API
 测试: curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"message":"帮我算 123*456"}'
 """
 import json
+import time
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -157,44 +158,73 @@ def chat(req: ChatRequest):
     return ChatResponse(reply=reply, steps=steps)
 
 
-@app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
-    """SSE 流式：实时推送思考过程和回答"""
+async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterator[str]:
+    active_agent = stream_agent or agent
+    config = {"configurable": {"thread_id": req.session_id}}
+    tool_started_at: dict[str, float] = {}
+    answer_started = False
 
-    async def event_generator() -> AsyncIterator[str]:
-        config = {"configurable": {"thread_id": req.session_id}}
+    yield stream_event(make_stage_event("received", "已收到问题"))
+    yield stream_event(make_stage_event("planning", "正在判断是否需要工具"))
 
-        # LangGraph 的 astream_events 逐事件推送
-        async for event in agent.astream_events(
+    try:
+        async for event in active_agent.astream_events(
             {"messages": [("user", req.message)]},
             config=config,
             version="v2",
         ):
             kind = event.get("event", "")
 
-            # 工具调用开始
             if kind == "on_tool_start":
-                yield f"data: {json.dumps({'type': 'tool_start', 'tool': event['name'], 'input': str(event['data'].get('input', ''))[:200]}, ensure_ascii=False)}\n\n"
+                tool_name = event["name"]
+                tool_started_at[tool_name] = time.perf_counter()
+                yield stream_event(make_stage_event("tooling", f"正在调用 {tool_name}"))
+                yield stream_event(
+                    make_tool_start_event(
+                        tool_name,
+                        event["data"].get("input", ""),
+                    )
+                )
 
-            # 工具调用结束
             elif kind == "on_tool_end":
-                yield f"data: {json.dumps({'type': 'tool_end', 'tool': event['name'], 'output': str(event['data'].get('output', ''))[:500]}, ensure_ascii=False)}\n\n"
+                tool_name = event["name"]
+                started_at = tool_started_at.pop(tool_name, None)
+                elapsed_ms = None
+                if started_at is not None:
+                    elapsed_ms = round((time.perf_counter() - started_at) * 1000)
+                yield stream_event(
+                    make_tool_end_event(
+                        tool_name,
+                        event["data"].get("output", ""),
+                        elapsed_ms=elapsed_ms,
+                    )
+                )
 
-            # LLM 流式输出 token
             elif kind == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]
-                if hasattr(chunk, "content") and chunk.content:
-                    yield f"data: {json.dumps({'type': 'text', 'content': chunk.content}, ensure_ascii=False)}\n\n"
+                content = getattr(chunk, "content", "")
+                if content:
+                    if not answer_started:
+                        answer_started = True
+                        yield stream_event(make_stage_event("answering", "正在整理最终回答"))
+                    yield stream_event(make_text_event(content))
 
-        # 结束标记
-        yield "data: [DONE]\n\n"
+        yield stream_event(make_stage_event("completed", "已完成"))
+    except Exception as exc:
+        yield stream_event(make_error_event(str(exc)))
+    finally:
+        yield done_event()
 
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """SSE 流式：实时推送可观察工作过程和回答"""
     return StreamingResponse(
-        event_generator(),
+        stream_chat_events(req),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",  # Nginx 禁用缓冲
+            "X-Accel-Buffering": "no",
         },
     )
 
