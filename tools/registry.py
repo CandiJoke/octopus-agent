@@ -1,4 +1,6 @@
 from pathlib import Path
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from langchain_core.tools import StructuredTool
 
@@ -9,16 +11,26 @@ from tools.search_knowledge.search_knowledge import run as search_knowledge_run
 TOOLS_DIR = Path(__file__).parent
 
 
-def _make_tool(tool_dir: str, run_fn) -> StructuredTool:
-    meta = load_tool_meta(TOOLS_DIR / tool_dir)
+@dataclass(frozen=True)
+class ToolSpec:
+    directory: str
+    run_fn: Callable[..., str]
+    category: str
+
+
+TOOL_SPECS = (
+    ToolSpec("calculator", calculator_run, "基础工具"),
+    ToolSpec("search_knowledge", search_knowledge_run, "知识检索"),
+)
+
+
+def _make_tool(spec: ToolSpec) -> StructuredTool:
+    meta = load_tool_meta(TOOLS_DIR / spec.directory)
     return StructuredTool.from_function(
-        func=run_fn,
+        func=spec.run_fn,
         name=meta["name"],
         description=meta["description"],
     )
 
 
-tools = [
-    _make_tool("calculator", calculator_run),
-    _make_tool("search_knowledge", search_knowledge_run),
-]
+tools = [_make_tool(spec) for spec in TOOL_SPECS]

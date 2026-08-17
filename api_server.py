@@ -26,6 +26,7 @@ from agent_console import (
     selected_base_url_value,
     selected_model,
 )
+from capabilities import build_capability_catalog
 from history_store import (
     AgentRunEventRecord,
     AgentRunRecord,
@@ -517,6 +518,11 @@ def list_user_sessions(
         serialize_session(session)
         for session in store.list_sessions(user_id, safe_limit)
     ]
+
+
+@app.get("/capabilities")
+def list_capabilities():
+    return build_capability_catalog()
 
 
 @app.post("/users/{user_id}/sessions")
