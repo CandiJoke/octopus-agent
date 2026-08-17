@@ -4,6 +4,7 @@ Agent HTTP 服务 —— 把 Agent 变成 API
 测试: curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"message":"帮我算 123*456"}'
 """
 import hashlib
+import asyncio
 import json
 import logging
 import time
@@ -87,6 +88,8 @@ history_store.initialize()
 STREAM_INPUT_LIMIT = 200
 STREAM_OUTPUT_LIMIT = 500
 STREAM_ERROR_MESSAGE = "Agent 运行失败，请稍后重试。"
+STREAM_STOPPED_MESSAGE = "用户已停止本次运行。"
+STREAM_STOPPED_ANSWER = "已停止输出。"
 
 
 def get_history_store() -> HistoryStore:
@@ -107,7 +110,10 @@ def serialize_session(record: ChatSessionRecord) -> dict[str, object]:
     }
 
 
-def serialize_message(record: ChatMessageRecord) -> dict[str, object]:
+def serialize_message(
+    record: ChatMessageRecord,
+    run_status: str | None = None,
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "messageId": record.message_id,
         "sessionId": record.session_id,
@@ -117,6 +123,8 @@ def serialize_message(record: ChatMessageRecord) -> dict[str, object]:
     }
     if record.run_id is not None:
         payload["runId"] = record.run_id
+    if run_status is not None:
+        payload["runStatus"] = run_status
     return payload
 
 
@@ -202,6 +210,13 @@ def make_text_event(content: str) -> dict[str, object]:
 def make_error_event(message: str) -> dict[str, object]:
     return {
         "type": "error",
+        "message": message,
+    }
+
+
+def make_stopped_event(message: str) -> dict[str, object]:
+    return {
+        "type": "stopped",
         "message": message,
     }
 
@@ -293,6 +308,8 @@ async def stream_chat_events(
     tool_started_at: dict[str, float] = {}
     answer_started = False
     answer_parts: list[str] = []
+    cancelled = False
+    run_finished = False
 
     def emit(payload: dict[str, object]) -> str:
         nonlocal event_persistence_enabled
@@ -311,6 +328,49 @@ async def stream_chat_events(
                 event_persistence_enabled = False
                 logger.exception("Chat history event persistence failed")
         return stream_event(event_payload)
+
+    def persist_stopped_run() -> None:
+        nonlocal event_persistence_enabled
+
+        stopped_payload = with_agent_run_id(
+            make_stopped_event(STREAM_STOPPED_MESSAGE),
+            run_id,
+        )
+        if event_persistence_enabled:
+            try:
+                persist_stream_event(
+                    active_store,
+                    req.user_id,
+                    req.session_id,
+                    run_id,
+                    stopped_payload,
+                )
+            except Exception:
+                event_persistence_enabled = False
+                logger.exception("Chat history stop event persistence failed")
+
+        agent_message_id = None
+        try:
+            stopped_message = active_store.save_message(
+                req.user_id,
+                req.session_id,
+                role="agent",
+                content="".join(answer_parts) or STREAM_STOPPED_ANSWER,
+                run_id=run_id,
+            )
+            agent_message_id = stopped_message.message_id
+        except Exception:
+            logger.exception("Chat history stop message persistence failed")
+
+        try:
+            active_store.stop_run(
+                req.user_id,
+                run_id,
+                STREAM_STOPPED_MESSAGE,
+                agent_message_id=agent_message_id,
+            )
+        except Exception:
+            logger.exception("Chat history stop persistence failed")
 
     try:
         active_store.ensure_session(req.user_id, req.session_id, title="新会话")
@@ -407,10 +467,16 @@ async def stream_chat_events(
                         run_id,
                         agent_message.message_id,
                     )
+                    run_finished = True
                 except Exception:
                     history_persistence_enabled = False
                     logger.exception("Chat history completion persistence failed")
             yield emit(make_stage_event("completed", "已完成"))
+    except (asyncio.CancelledError, GeneratorExit):
+        cancelled = True
+        if history_persistence_enabled and not run_finished:
+            persist_stopped_run()
+        raise
     except Exception:
         logger.exception("Chat stream failed")
         if history_persistence_enabled:
@@ -420,7 +486,8 @@ async def stream_chat_events(
                 logger.exception("Chat history failure persistence failed")
         yield emit(make_error_event(STREAM_ERROR_MESSAGE))
     finally:
-        yield done_event()
+        if not cancelled:
+            yield done_event()
 
 
 @app.post("/chat/stream")
@@ -477,9 +544,17 @@ def list_session_messages(
     session_id: str,
     store: HistoryStore = Depends(get_history_store),
 ):
+    messages = store.list_messages(user_id, session_id)
+    run_statuses = store.list_run_statuses(
+        user_id,
+        [message.run_id for message in messages if message.run_id is not None],
+    )
     return [
-        serialize_message(message)
-        for message in store.list_messages(user_id, session_id)
+        serialize_message(
+            message,
+            run_statuses.get(message.run_id) if message.run_id is not None else None,
+        )
+        for message in messages
     ]
 
 

@@ -10,7 +10,7 @@ from typing import Literal
 
 
 MessageRole = Literal["user", "agent"]
-RunStatus = Literal["running", "completed", "failed"]
+RunStatus = Literal["running", "completed", "failed", "stopped"]
 
 
 @dataclass(frozen=True)
@@ -88,8 +88,11 @@ class HistoryStore:
     def initialize(self) -> None:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            if self._needs_user_scoped_session_migration(conn):
-                self._migrate_to_user_scoped_sessions(conn)
+            if (
+                self._needs_user_scoped_session_migration(conn)
+                or self._needs_run_status_migration(conn)
+            ):
+                self._migrate_to_current_schema(conn)
             self._create_schema(conn)
             conn.commit()
 
@@ -135,7 +138,7 @@ class HistoryStore:
                 user_id TEXT NOT NULL,
                 user_message_id TEXT NOT NULL,
                 agent_message_id TEXT,
-                status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+                status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed', 'stopped')),
                 prompt TEXT NOT NULL,
                 model TEXT NOT NULL,
                 started_at TEXT NOT NULL,
@@ -170,7 +173,19 @@ class HistoryStore:
         primary_key_columns = self._primary_key_columns(conn, "chat_sessions")
         return primary_key_columns != ["user_id", "session_id"]
 
-    def _migrate_to_user_scoped_sessions(self, conn: sqlite3.Connection) -> None:
+    def _needs_run_status_migration(self, conn: sqlite3.Connection) -> bool:
+        if not self._table_exists(conn, "agent_runs"):
+            return False
+        row = conn.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'agent_runs'
+            """,
+        ).fetchone()
+        schema_sql = str(row["sql"] or "") if row is not None else ""
+        return "'stopped'" not in schema_sql
+
+    def _migrate_to_current_schema(self, conn: sqlite3.Connection) -> None:
         conn.execute("PRAGMA foreign_keys=OFF")
         for index_name in (
             "idx_chat_sessions_user_updated",
@@ -243,6 +258,9 @@ class HistoryStore:
         for table_name in legacy_tables:
             conn.execute(f"DROP TABLE {table_name}_legacy")
         conn.execute("PRAGMA foreign_keys=ON")
+
+    def _migrate_to_user_scoped_sessions(self, conn: sqlite3.Connection) -> None:
+        self._migrate_to_current_schema(conn)
 
     def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
         row = conn.execute(
@@ -539,6 +557,41 @@ class HistoryStore:
             error_message=error_message,
         )
 
+    def stop_run(
+        self,
+        user_id: str,
+        run_id: str,
+        error_message: str,
+        agent_message_id: str | None = None,
+    ) -> AgentRunRecord | None:
+        return self._finish_run(
+            user_id,
+            run_id,
+            "stopped",
+            agent_message_id=agent_message_id,
+            error_message=error_message,
+        )
+
+    def list_run_statuses(
+        self,
+        user_id: str,
+        run_ids: list[str],
+    ) -> dict[str, RunStatus]:
+        unique_run_ids = list(dict.fromkeys(run_ids))
+        if not unique_run_ids:
+            return {}
+
+        placeholders = ",".join("?" for _ in unique_run_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT run_id, status FROM agent_runs
+                WHERE user_id = ? AND run_id IN ({placeholders})
+                """,
+                (user_id, *unique_run_ids),
+            ).fetchall()
+        return {row["run_id"]: row["status"] for row in rows}
+
     def get_run_detail(
         self,
         user_id: str,
@@ -578,7 +631,7 @@ class HistoryStore:
                 """
                 UPDATE agent_runs
                 SET status = ?, agent_message_id = ?, ended_at = ?, error_message = ?
-                WHERE user_id = ? AND run_id = ?
+                WHERE user_id = ? AND run_id = ? AND status = 'running'
                 """,
                 (status, agent_message_id, now, error_message, user_id, run_id),
             )

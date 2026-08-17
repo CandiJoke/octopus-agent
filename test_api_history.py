@@ -41,14 +41,22 @@ class HistoryApiTests(unittest.TestCase):
 
     def test_messages_endpoint_returns_ordered_messages_with_run_id(self):
         self.store.create_session("user-a", session_id="session-a")
-        self.store.save_message(
+        user_message = self.store.save_message(
             "user-a",
             "session-a",
             "user",
             "hello",
             message_id="message-user",
         )
-        self.store.save_message(
+        self.store.create_run(
+            "user-a",
+            "session-a",
+            user_message.message_id,
+            "hello",
+            "model-a",
+            run_id="run-a",
+        )
+        agent_message = self.store.save_message(
             "user-a",
             "session-a",
             "agent",
@@ -56,18 +64,24 @@ class HistoryApiTests(unittest.TestCase):
             message_id="message-agent",
             run_id="run-a",
         )
+        self.store.complete_run("user-a", "run-a", agent_message.message_id)
 
         response = self.client.get("/users/user-a/sessions/session-a/messages")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             [
-                (message["messageId"], message["role"], message.get("runId"))
+                (
+                    message["messageId"],
+                    message["role"],
+                    message.get("runId"),
+                    message.get("runStatus"),
+                )
                 for message in response.json()
             ],
             [
-                ("message-user", "user", None),
-                ("message-agent", "agent", "run-a"),
+                ("message-user", "user", None, None),
+                ("message-agent", "agent", "run-a", "completed"),
             ],
         )
 

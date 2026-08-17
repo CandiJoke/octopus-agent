@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+import asyncio
 from pathlib import Path
 from unittest import mock
 
@@ -70,6 +71,10 @@ class StreamEventHelperTests(unittest.TestCase):
         self.assertEqual(
             api_server.make_error_event("boom"),
             {"type": "error", "message": "boom"},
+        )
+        self.assertEqual(
+            api_server.make_stopped_event("用户已停止本次运行。"),
+            {"type": "stopped", "message": "用户已停止本次运行。"},
         )
         self.assertEqual(api_server.done_event(), "data: [DONE]\n\n")
 
@@ -458,6 +463,70 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payloads[-1]["type"], "error")
         self.assertEqual(detail.run.status, "failed")
         self.assertEqual(detail.run.error_message, api_server.STREAM_ERROR_MESSAGE)
+
+    async def test_stream_chat_events_marks_persisted_run_stopped_when_cancelled(self):
+        store = make_temp_store(self)
+        fake_agent = FakeStreamAgent([], error=asyncio.CancelledError())
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="session-cancelled",
+        )
+
+        chunks = []
+        with self.assertRaises(asyncio.CancelledError):
+            async for chunk in api_server.stream_chat_events(
+                req,
+                stream_agent=fake_agent,
+                store=store,
+            ):
+                chunks.append(chunk)
+
+        payloads = json_chunks(chunks)
+        run_id = payloads[0]["runId"]
+        detail = store.get_run_detail("user-stream", run_id)
+        messages = store.list_messages("user-stream", "session-cancelled")
+
+        self.assertEqual([payload["type"] for payload in payloads], ["stage", "stage"])
+        self.assertEqual(detail.run.status, "stopped")
+        self.assertEqual(detail.run.error_message, api_server.STREAM_STOPPED_MESSAGE)
+        self.assertEqual([message.role for message in messages], ["user", "agent"])
+        self.assertEqual(messages[1].content, api_server.STREAM_STOPPED_ANSWER)
+        self.assertEqual(messages[1].run_id, run_id)
+        self.assertEqual(detail.run.agent_message_id, messages[1].message_id)
+        self.assertEqual(detail.events[-1].event_type, "stopped")
+        self.assertEqual(detail.events[-1].payload["type"], "stopped")
+
+    async def test_stream_chat_events_marks_run_stopped_when_iterator_is_closed(self):
+        store = make_temp_store(self)
+        fake_agent = FakeStreamAgent(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": FakeChunk("late answer")},
+                },
+            ]
+        )
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="session-closed",
+        )
+        stream = api_server.stream_chat_events(req, stream_agent=fake_agent, store=store)
+
+        first_chunk = await stream.__anext__()
+        await stream.aclose()
+
+        run_id = parse_sse_payload(first_chunk)["runId"]
+        detail = store.get_run_detail("user-stream", run_id)
+        messages = store.list_messages("user-stream", "session-closed")
+
+        self.assertEqual(parse_sse_payload(first_chunk)["type"], "stage")
+        self.assertEqual(detail.run.status, "stopped")
+        self.assertEqual(detail.run.error_message, api_server.STREAM_STOPPED_MESSAGE)
+        self.assertEqual([message.role for message in messages], ["user", "agent"])
+        self.assertEqual(messages[1].run_id, run_id)
+        self.assertEqual(detail.events[-1].event_type, "stopped")
 
     async def test_successful_stream_without_text_marks_run_completed(self):
         store = make_temp_store(self)

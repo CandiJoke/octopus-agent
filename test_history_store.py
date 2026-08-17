@@ -351,6 +351,183 @@ class HistoryStoreTests(unittest.TestCase):
         self.assertEqual(detail.run.error_message, "Agent 运行失败，请稍后重试。")
         self.assertIsNotNone(detail.run.ended_at)
 
+    def test_stopped_run_keeps_safe_stop_message(self):
+        self.store.create_session("user-a", title="chat", session_id="session-a")
+        user_message = self.store.save_message(
+            "user-a",
+            "session-a",
+            role="user",
+            content="long task",
+            message_id="message-user",
+        )
+        self.store.create_run(
+            "user-a",
+            "session-a",
+            user_message_id=user_message.message_id,
+            prompt="long task",
+            model="model-a",
+            run_id="run-stop",
+        )
+
+        stopped = self.store.stop_run(
+            "user-a",
+            "run-stop",
+            "用户已停止本次运行。",
+        )
+        detail = self.store.get_run_detail("user-a", "run-stop")
+
+        self.assertIsNotNone(stopped)
+        self.assertEqual(stopped.status, "stopped")
+        self.assertIsNone(stopped.agent_message_id)
+        self.assertEqual(detail.run.error_message, "用户已停止本次运行。")
+        self.assertIsNotNone(detail.run.ended_at)
+
+    def test_terminal_run_status_cannot_be_overwritten(self):
+        self.store.create_session("user-a", title="chat", session_id="session-a")
+        user_message = self.store.save_message(
+            "user-a",
+            "session-a",
+            role="user",
+            content="hello",
+            message_id="message-user",
+        )
+        self.store.create_run(
+            "user-a",
+            "session-a",
+            user_message_id=user_message.message_id,
+            prompt="hello",
+            model="model-a",
+            run_id="run-terminal",
+        )
+        agent_message = self.store.save_message(
+            "user-a",
+            "session-a",
+            role="agent",
+            content="hi",
+            message_id="message-agent",
+            run_id="run-terminal",
+        )
+
+        completed = self.store.complete_run(
+            "user-a",
+            "run-terminal",
+            agent_message.message_id,
+        )
+        stopped = self.store.stop_run(
+            "user-a",
+            "run-terminal",
+            "用户已停止本次运行。",
+        )
+        failed = self.store.fail_run(
+            "user-a",
+            "run-terminal",
+            "Agent 运行失败，请稍后重试。",
+        )
+
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(stopped.status, "completed")
+        self.assertEqual(failed.status, "completed")
+        self.assertEqual(stopped.agent_message_id, agent_message.message_id)
+        self.assertIsNone(stopped.error_message)
+
+    def test_initialize_migrates_legacy_run_status_constraint(self):
+        legacy_path = Path(self.tmpdir.name) / "legacy_status.db"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                PRAGMA foreign_keys=ON;
+
+                CREATE TABLE chat_sessions (
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, session_id)
+                );
+                CREATE TABLE chat_messages (
+                    message_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'agent')),
+                    content TEXT NOT NULL,
+                    run_id TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id, session_id)
+                        REFERENCES chat_sessions(user_id, session_id)
+                );
+                CREATE TABLE agent_runs (
+                    run_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    user_message_id TEXT NOT NULL,
+                    agent_message_id TEXT,
+                    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+                    prompt TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    error_message TEXT,
+                    FOREIGN KEY(user_id, session_id)
+                        REFERENCES chat_sessions(user_id, session_id),
+                    FOREIGN KEY(user_message_id) REFERENCES chat_messages(message_id)
+                );
+                CREATE TABLE agent_run_events (
+                    event_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(run_id)
+                );
+
+                INSERT INTO chat_sessions
+                    (session_id, user_id, title, created_at, updated_at)
+                VALUES
+                    ('session-a', 'user-a', 'legacy', '2026-08-17T00:00:00Z', '2026-08-17T00:00:00Z');
+                INSERT INTO chat_messages
+                    (message_id, session_id, user_id, role, content, run_id, created_at)
+                VALUES
+                    ('message-user', 'session-a', 'user-a', 'user', 'hello', NULL, '2026-08-17T00:00:01Z');
+                INSERT INTO agent_runs
+                    (
+                        run_id, session_id, user_id, user_message_id, agent_message_id,
+                        status, prompt, model, started_at, ended_at, error_message
+                    )
+                VALUES
+                    (
+                        'run-legacy', 'session-a', 'user-a', 'message-user', NULL,
+                        'running', 'hello', 'model-a', '2026-08-17T00:00:01Z', NULL, NULL
+                    );
+                INSERT INTO agent_run_events
+                    (
+                        event_id, run_id, session_id, user_id, sequence,
+                        event_type, payload_json, created_at
+                    )
+                VALUES
+                    (
+                        'event-legacy', 'run-legacy', 'session-a', 'user-a', 1,
+                        'stage', '{"type": "stage"}', '2026-08-17T00:00:02Z'
+                    );
+                """
+            )
+
+        migrated_store = HistoryStore(legacy_path)
+        migrated_store.initialize()
+        stopped = migrated_store.stop_run(
+            "user-a",
+            "run-legacy",
+            "用户已停止本次运行。",
+        )
+        detail = migrated_store.get_run_detail("user-a", "run-legacy")
+
+        self.assertEqual(stopped.status, "stopped")
+        self.assertEqual(detail.events[0].event_id, "event-legacy")
+        self.assertEqual(detail.run.error_message, "用户已停止本次运行。")
+
 
 if __name__ == "__main__":
     unittest.main()
