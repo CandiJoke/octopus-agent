@@ -87,67 +87,10 @@ class HistoryStore:
 
     def initialize(self) -> None:
         with self._connect() as conn:
-            conn.executescript(
-                """
-                PRAGMA journal_mode=WAL;
-                PRAGMA foreign_keys=ON;
-
-                CREATE TABLE IF NOT EXISTS chat_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
-                    ON chat_sessions(user_id, updated_at DESC);
-
-                CREATE TABLE IF NOT EXISTS chat_messages (
-                    message_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    role TEXT NOT NULL CHECK (role IN ('user', 'agent')),
-                    content TEXT NOT NULL,
-                    run_id TEXT,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
-                    ON chat_messages(user_id, session_id, created_at ASC);
-
-                CREATE TABLE IF NOT EXISTS agent_runs (
-                    run_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    user_message_id TEXT NOT NULL,
-                    agent_message_id TEXT,
-                    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
-                    prompt TEXT NOT NULL,
-                    model TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    ended_at TEXT,
-                    error_message TEXT,
-                    FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id),
-                    FOREIGN KEY(user_message_id) REFERENCES chat_messages(message_id)
-                );
-                CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started
-                    ON agent_runs(user_id, started_at DESC);
-
-                CREATE TABLE IF NOT EXISTS agent_run_events (
-                    event_id TEXT PRIMARY KEY,
-                    run_id TEXT NOT NULL,
-                    session_id TEXT NOT NULL,
-                    user_id TEXT NOT NULL,
-                    sequence INTEGER NOT NULL,
-                    event_type TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    FOREIGN KEY(run_id) REFERENCES agent_runs(run_id)
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_events_sequence
-                    ON agent_run_events(run_id, sequence);
-                """
-            )
+            conn.execute("PRAGMA journal_mode=WAL")
+            if self._needs_user_scoped_session_migration(conn):
+                self._migrate_to_user_scoped_sessions(conn)
+            self._create_schema(conn)
             conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
@@ -155,6 +98,171 @@ class HistoryStore:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
+
+    def _create_schema(self, conn: sqlite3.Connection) -> None:
+        conn.executescript(
+            """
+            PRAGMA foreign_keys=ON;
+
+            CREATE TABLE IF NOT EXISTS chat_sessions (
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(user_id, session_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_updated
+                ON chat_sessions(user_id, updated_at DESC, session_id DESC);
+
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                message_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('user', 'agent')),
+                content TEXT NOT NULL,
+                run_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(user_id, session_id)
+                    REFERENCES chat_sessions(user_id, session_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
+                ON chat_messages(user_id, session_id, created_at ASC, message_id ASC);
+
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                run_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                user_message_id TEXT NOT NULL,
+                agent_message_id TEXT,
+                status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+                prompt TEXT NOT NULL,
+                model TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                ended_at TEXT,
+                error_message TEXT,
+                FOREIGN KEY(user_id, session_id)
+                    REFERENCES chat_sessions(user_id, session_id),
+                FOREIGN KEY(user_message_id) REFERENCES chat_messages(message_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started
+                ON agent_runs(user_id, started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_run_events (
+                event_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES agent_runs(run_id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_run_events_sequence
+                ON agent_run_events(run_id, sequence);
+            """
+        )
+
+    def _needs_user_scoped_session_migration(self, conn: sqlite3.Connection) -> bool:
+        if not self._table_exists(conn, "chat_sessions"):
+            return False
+        primary_key_columns = self._primary_key_columns(conn, "chat_sessions")
+        return primary_key_columns != ["user_id", "session_id"]
+
+    def _migrate_to_user_scoped_sessions(self, conn: sqlite3.Connection) -> None:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        for index_name in (
+            "idx_chat_sessions_user_updated",
+            "idx_chat_messages_session_created",
+            "idx_agent_runs_user_started",
+            "idx_agent_run_events_sequence",
+        ):
+            conn.execute(f"DROP INDEX IF EXISTS {index_name}")
+
+        legacy_tables = [
+            table_name
+            for table_name in (
+                "agent_run_events",
+                "agent_runs",
+                "chat_messages",
+                "chat_sessions",
+            )
+            if self._table_exists(conn, table_name)
+        ]
+        for table_name in legacy_tables:
+            conn.execute(f"ALTER TABLE {table_name} RENAME TO {table_name}_legacy")
+
+        self._create_schema(conn)
+
+        if "chat_sessions" in legacy_tables:
+            conn.execute(
+                """
+                INSERT INTO chat_sessions(session_id, user_id, title, created_at, updated_at)
+                SELECT session_id, user_id, title, created_at, updated_at
+                FROM chat_sessions_legacy
+                """
+            )
+        if "chat_messages" in legacy_tables:
+            conn.execute(
+                """
+                INSERT INTO chat_messages(
+                    message_id, session_id, user_id, role, content, run_id, created_at
+                )
+                SELECT message_id, session_id, user_id, role, content, run_id, created_at
+                FROM chat_messages_legacy
+                """
+            )
+        if "agent_runs" in legacy_tables:
+            conn.execute(
+                """
+                INSERT INTO agent_runs(
+                    run_id, session_id, user_id, user_message_id, agent_message_id,
+                    status, prompt, model, started_at, ended_at, error_message
+                )
+                SELECT
+                    run_id, session_id, user_id, user_message_id, agent_message_id,
+                    status, prompt, model, started_at, ended_at, error_message
+                FROM agent_runs_legacy
+                """
+            )
+        if "agent_run_events" in legacy_tables:
+            conn.execute(
+                """
+                INSERT INTO agent_run_events(
+                    event_id, run_id, session_id, user_id, sequence,
+                    event_type, payload_json, created_at
+                )
+                SELECT
+                    event_id, run_id, session_id, user_id, sequence,
+                    event_type, payload_json, created_at
+                FROM agent_run_events_legacy
+                """
+            )
+
+        for table_name in legacy_tables:
+            conn.execute(f"DROP TABLE {table_name}_legacy")
+        conn.execute("PRAGMA foreign_keys=ON")
+
+    def _table_exists(self, conn: sqlite3.Connection, table_name: str) -> bool:
+        row = conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type = 'table' AND name = ?
+            """,
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _primary_key_columns(
+        self,
+        conn: sqlite3.Connection,
+        table_name: str,
+    ) -> list[str]:
+        rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        primary_key_rows = [row for row in rows if row["pk"]]
+        primary_key_rows.sort(key=lambda row: row["pk"])
+        return [row["name"] for row in primary_key_rows]
 
     def create_session(
         self,
@@ -200,7 +308,7 @@ class HistoryStore:
                 """
                 SELECT * FROM chat_sessions
                 WHERE user_id = ?
-                ORDER BY updated_at DESC, created_at DESC
+                ORDER BY updated_at DESC, created_at DESC, session_id DESC
                 LIMIT ?
                 """,
                 (user_id, limit),
@@ -257,7 +365,7 @@ class HistoryStore:
                 """
                 SELECT * FROM chat_messages
                 WHERE user_id = ? AND session_id = ?
-                ORDER BY created_at ASC
+                ORDER BY created_at ASC, message_id ASC
                 """,
                 (user_id, session_id),
             ).fetchall()

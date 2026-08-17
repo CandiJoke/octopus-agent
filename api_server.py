@@ -3,6 +3,7 @@ Agent HTTP 服务 —— 把 Agent 变成 API
 启动: cd agent-hub && source .venv/bin/activate && uvicorn api_server:app --reload --port 8000
 测试: curl -X POST http://localhost:8000/chat -H "Content-Type: application/json" -d '{"message":"帮我算 123*456"}'
 """
+import hashlib
 import json
 import logging
 import time
@@ -30,6 +31,7 @@ from history_store import (
     ChatMessageRecord,
     ChatSessionRecord,
     HistoryStore,
+    new_id,
 )
 from tools import tools
 
@@ -89,6 +91,11 @@ STREAM_ERROR_MESSAGE = "Agent 运行失败，请稍后重试。"
 
 def get_history_store() -> HistoryStore:
     return history_store
+
+
+def agent_thread_id(user_id: str, session_id: str) -> str:
+    digest = hashlib.sha256(f"{user_id}\0{session_id}".encode("utf-8")).hexdigest()
+    return f"thread_{digest[:32]}"
 
 
 def serialize_session(record: ChatSessionRecord) -> dict[str, object]:
@@ -241,7 +248,7 @@ async def stream_agent_context(stream_agent=None):
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest):
     """普通请求：一次返回完整结果"""
-    config = {"configurable": {"thread_id": req.session_id}}
+    config = {"configurable": {"thread_id": agent_thread_id(req.user_id, req.session_id)}}
 
     # Agent 执行
     result = agent.invoke(
@@ -279,38 +286,55 @@ async def stream_chat_events(
     store: HistoryStore | None = None,
 ) -> AsyncIterator[str]:
     active_store = store or history_store
-    active_store.ensure_session(req.user_id, req.session_id, title="新会话")
-    user_message = active_store.save_message(
-        req.user_id,
-        req.session_id,
-        role="user",
-        content=req.message,
-    )
-    run = active_store.create_run(
-        req.user_id,
-        req.session_id,
-        user_message_id=user_message.message_id,
-        prompt=req.message,
-        model=selected_model(),
-    )
-    config = {"configurable": {"thread_id": req.session_id}}
+    run_id = new_id("run")
+    history_persistence_enabled = False
+    event_persistence_enabled = False
+    config = {"configurable": {"thread_id": agent_thread_id(req.user_id, req.session_id)}}
     tool_started_at: dict[str, float] = {}
     answer_started = False
     answer_parts: list[str] = []
 
     def emit(payload: dict[str, object]) -> str:
-        event_payload = with_agent_run_id(payload, run.run_id)
-        persist_stream_event(
-            active_store,
-            req.user_id,
-            req.session_id,
-            run.run_id,
-            event_payload,
-        )
+        nonlocal event_persistence_enabled
+
+        event_payload = with_agent_run_id(payload, run_id)
+        if event_persistence_enabled:
+            try:
+                persist_stream_event(
+                    active_store,
+                    req.user_id,
+                    req.session_id,
+                    run_id,
+                    event_payload,
+                )
+            except Exception:
+                event_persistence_enabled = False
+                logger.exception("Chat history event persistence failed")
         return stream_event(event_payload)
 
-    yield emit(make_stage_event("received", "已收到问题"))
     try:
+        active_store.ensure_session(req.user_id, req.session_id, title="新会话")
+        user_message = active_store.save_message(
+            req.user_id,
+            req.session_id,
+            role="user",
+            content=req.message,
+        )
+        active_store.create_run(
+            req.user_id,
+            req.session_id,
+            user_message_id=user_message.message_id,
+            prompt=req.message,
+            model=selected_model(),
+            run_id=run_id,
+        )
+        history_persistence_enabled = True
+        event_persistence_enabled = True
+    except Exception:
+        logger.exception("Chat history setup failed")
+
+    try:
+        yield emit(make_stage_event("received", "已收到问题"))
         async with stream_agent_context(stream_agent) as active_agent:
             yield emit(make_stage_event("planning", "正在判断是否需要工具"))
 
@@ -369,33 +393,44 @@ async def stream_chat_events(
                         yield emit(make_text_event(content))
 
             final_answer = "".join(answer_parts)
-            if final_answer:
-                agent_message = active_store.save_message(
-                    req.user_id,
-                    req.session_id,
-                    role="agent",
-                    content=final_answer,
-                    run_id=run.run_id,
-                )
-                active_store.complete_run(
-                    req.user_id,
-                    run.run_id,
-                    agent_message.message_id,
-                )
+            if history_persistence_enabled:
+                try:
+                    agent_message = active_store.save_message(
+                        req.user_id,
+                        req.session_id,
+                        role="agent",
+                        content=final_answer,
+                        run_id=run_id,
+                    )
+                    active_store.complete_run(
+                        req.user_id,
+                        run_id,
+                        agent_message.message_id,
+                    )
+                except Exception:
+                    history_persistence_enabled = False
+                    logger.exception("Chat history completion persistence failed")
             yield emit(make_stage_event("completed", "已完成"))
     except Exception:
         logger.exception("Chat stream failed")
-        active_store.fail_run(req.user_id, run.run_id, STREAM_ERROR_MESSAGE)
+        if history_persistence_enabled:
+            try:
+                active_store.fail_run(req.user_id, run_id, STREAM_ERROR_MESSAGE)
+            except Exception:
+                logger.exception("Chat history failure persistence failed")
         yield emit(make_error_event(STREAM_ERROR_MESSAGE))
     finally:
         yield done_event()
 
 
 @app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
+async def chat_stream(
+    req: ChatRequest,
+    store: HistoryStore = Depends(get_history_store),
+):
     """SSE 流式：实时推送可观察工作过程和回答"""
     return StreamingResponse(
-        stream_chat_events(req),
+        stream_chat_events(req, store=store),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -119,6 +119,16 @@ class FailingAsyncSaverContext:
         return None
 
 
+class SetupFailingHistoryStore:
+    def ensure_session(self, *args, **kwargs):
+        raise RuntimeError("history setup failed")
+
+
+class AppendFailingHistoryStore(HistoryStore):
+    def append_run_event(self, *args, **kwargs):
+        raise RuntimeError("history event append failed")
+
+
 async def collect_stream(req: api_server.ChatRequest, fake_agent: FakeStreamAgent):
     chunks = []
     async for chunk in api_server.stream_chat_events(req, stream_agent=fake_agent):
@@ -158,6 +168,15 @@ def json_chunks(chunks: list[str]) -> list[dict]:
 
 
 class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_thread_id_is_scoped_by_user_and_session(self):
+        user_a_thread = api_server.agent_thread_id("user-a", "shared-session")
+        user_b_thread = api_server.agent_thread_id("user-b", "shared-session")
+        other_session_thread = api_server.agent_thread_id("user-a", "other-session")
+
+        self.assertTrue(user_a_thread.startswith("thread_"))
+        self.assertNotEqual(user_a_thread, user_b_thread)
+        self.assertNotEqual(user_a_thread, other_session_thread)
+
     async def test_stream_chat_events_creates_agent_with_async_sqlite_saver(self):
         store = make_temp_store(self)
         async_saver = object()
@@ -277,7 +296,14 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payloads[7]["stage"], "completed")
         self.assertEqual(
             fake_agent.config,
-            {"configurable": {"thread_id": "session-test"}},
+            {
+                "configurable": {
+                    "thread_id": api_server.agent_thread_id(
+                        "user-stream",
+                        "session-test",
+                    )
+                }
+            },
         )
         self.assertEqual(fake_agent.version, "v2")
 
@@ -432,6 +458,84 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payloads[-1]["type"], "error")
         self.assertEqual(detail.run.status, "failed")
         self.assertEqual(detail.run.error_message, api_server.STREAM_ERROR_MESSAGE)
+
+    async def test_successful_stream_without_text_marks_run_completed(self):
+        store = make_temp_store(self)
+        fake_agent = FakeStreamAgent([])
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="session-no-text",
+        )
+
+        payloads = json_chunks(await collect_stream_with_store(req, fake_agent, store))
+        run_id = payloads[0]["runId"]
+        detail = store.get_run_detail("user-stream", run_id)
+        messages = store.list_messages("user-stream", "session-no-text")
+
+        self.assertEqual(payloads[-1]["stage"], "completed")
+        self.assertEqual(detail.run.status, "completed")
+        self.assertEqual([message.role for message in messages], ["user", "agent"])
+        self.assertEqual(messages[1].content, "")
+        self.assertEqual(messages[1].run_id, run_id)
+
+    async def test_history_setup_failure_does_not_break_stream_contract(self):
+        fake_agent = FakeStreamAgent(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": FakeChunk("still answers")},
+                },
+            ]
+        )
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="session-history-setup-fails",
+        )
+
+        with mock.patch.object(api_server.logger, "exception") as log_exception:
+            chunks = await collect_stream_with_store(
+                req,
+                fake_agent,
+                SetupFailingHistoryStore(),
+            )
+        payloads = json_chunks(chunks)
+
+        self.assertEqual(chunks[-1], api_server.done_event())
+        self.assertEqual(payloads[-2]["content"], "still answers")
+        self.assertEqual(payloads[-1]["stage"], "completed")
+        log_exception.assert_called_once_with("Chat history setup failed")
+
+    async def test_history_event_append_failure_does_not_break_stream_contract(self):
+        store = make_temp_store(self)
+        append_failing_store = AppendFailingHistoryStore(store.db_path)
+        fake_agent = FakeStreamAgent(
+            [
+                {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": FakeChunk("answer survives")},
+                },
+            ]
+        )
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="session-append-fails",
+        )
+
+        with mock.patch.object(api_server.logger, "exception") as log_exception:
+            chunks = await collect_stream_with_store(req, fake_agent, append_failing_store)
+        payloads = json_chunks(chunks)
+        run_id = payloads[0]["runId"]
+        detail = store.get_run_detail("user-stream", run_id)
+
+        self.assertEqual(chunks[-1], api_server.done_event())
+        self.assertEqual(payloads[-2]["content"], "answer survives")
+        self.assertEqual(payloads[-1]["stage"], "completed")
+        self.assertEqual(detail.run.status, "completed")
+        self.assertEqual(detail.events, [])
+        log_exception.assert_any_call("Chat history event persistence failed")
 
     async def test_received_is_emitted_before_checkpoint_initialization_failure(self):
         store = make_temp_store(self)

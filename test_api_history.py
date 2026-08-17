@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 
@@ -102,6 +103,30 @@ class HistoryApiTests(unittest.TestCase):
         self.assertEqual(allowed.json()["run"]["runId"], "run-a")
         self.assertEqual(allowed.json()["events"][0]["payload"]["runId"], "run-a")
         self.assertEqual(hidden.status_code, 404)
+
+    def test_stream_route_uses_history_store_dependency(self):
+        captured = {}
+
+        async def fake_stream_chat_events(req, stream_agent=None, store=None):
+            captured["store"] = store
+            yield api_server.done_event()
+
+        with mock.patch.object(
+            api_server,
+            "stream_chat_events",
+            fake_stream_chat_events,
+        ):
+            response = self.client.post(
+                "/chat/stream",
+                json={
+                    "userId": "user-a",
+                    "sessionId": "session-a",
+                    "message": "hello",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIs(captured["store"], self.store)
 
 
 if __name__ == "__main__":

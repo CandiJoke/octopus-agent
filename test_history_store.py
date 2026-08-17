@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -44,6 +45,133 @@ class HistoryStoreTests(unittest.TestCase):
         )
         self.assertEqual(older.user_id, "user-a")
         self.assertEqual(newer.user_id, "user-a")
+
+    def test_same_session_id_can_be_reused_by_different_users(self):
+        self.store.create_session(
+            "user-a",
+            title="user a shared",
+            session_id="shared-session",
+        )
+        self.store.create_session(
+            "user-b",
+            title="user b shared",
+            session_id="shared-session",
+        )
+
+        self.store.save_message(
+            "user-a",
+            "shared-session",
+            role="user",
+            content="from user a",
+            message_id="message-user-a",
+        )
+        self.store.save_message(
+            "user-b",
+            "shared-session",
+            role="user",
+            content="from user b",
+            message_id="message-user-b",
+        )
+
+        user_a_messages = self.store.list_messages("user-a", "shared-session")
+        user_b_messages = self.store.list_messages("user-b", "shared-session")
+
+        self.assertEqual([message.content for message in user_a_messages], ["from user a"])
+        self.assertEqual([message.content for message in user_b_messages], ["from user b"])
+
+    def test_initialize_migrates_legacy_global_session_schema(self):
+        legacy_path = Path(self.tmpdir.name) / "legacy.db"
+        with sqlite3.connect(legacy_path) as conn:
+            conn.executescript(
+                """
+                PRAGMA foreign_keys=ON;
+
+                CREATE TABLE chat_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE chat_messages (
+                    message_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('user', 'agent')),
+                    content TEXT NOT NULL,
+                    run_id TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id)
+                );
+                CREATE TABLE agent_runs (
+                    run_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    user_message_id TEXT NOT NULL,
+                    agent_message_id TEXT,
+                    status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
+                    prompt TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    error_message TEXT,
+                    FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id),
+                    FOREIGN KEY(user_message_id) REFERENCES chat_messages(message_id)
+                );
+                CREATE TABLE agent_run_events (
+                    event_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(run_id) REFERENCES agent_runs(run_id)
+                );
+
+                INSERT INTO chat_sessions
+                    (session_id, user_id, title, created_at, updated_at)
+                VALUES
+                    ('shared-session', 'user-a', 'legacy', '2026-08-17T00:00:00Z', '2026-08-17T00:00:00Z');
+                INSERT INTO chat_messages
+                    (message_id, session_id, user_id, role, content, run_id, created_at)
+                VALUES
+                    ('message-user', 'shared-session', 'user-a', 'user', 'legacy hello', NULL, '2026-08-17T00:00:01Z');
+                INSERT INTO agent_runs
+                    (
+                        run_id, session_id, user_id, user_message_id, agent_message_id,
+                        status, prompt, model, started_at, ended_at, error_message
+                    )
+                VALUES
+                    (
+                        'run-legacy', 'shared-session', 'user-a', 'message-user', NULL,
+                        'running', 'legacy hello', 'model-a', '2026-08-17T00:00:01Z', NULL, NULL
+                    );
+                INSERT INTO agent_run_events
+                    (
+                        event_id, run_id, session_id, user_id, sequence,
+                        event_type, payload_json, created_at
+                    )
+                VALUES
+                    (
+                        'event-legacy', 'run-legacy', 'shared-session', 'user-a', 1,
+                        'stage', '{"type": "stage"}', '2026-08-17T00:00:02Z'
+                    );
+                """
+            )
+
+        migrated_store = HistoryStore(legacy_path)
+        migrated_store.initialize()
+        migrated_store.create_session("user-b", session_id="shared-session")
+
+        user_a_messages = migrated_store.list_messages("user-a", "shared-session")
+        user_b_sessions = migrated_store.list_sessions("user-b")
+        run_detail = migrated_store.get_run_detail("user-a", "run-legacy")
+
+        self.assertEqual([message.content for message in user_a_messages], ["legacy hello"])
+        self.assertEqual(user_b_sessions[0].session_id, "shared-session")
+        self.assertEqual(run_detail.events[0].event_id, "event-legacy")
 
     def test_messages_are_ordered_and_session_update_time_moves_forward(self):
         self.store.create_session("user-a", title="chat", session_id="session-a")
