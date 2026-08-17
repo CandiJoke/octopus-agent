@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain.agents import create_agent as create_langchain_agent
@@ -23,6 +23,13 @@ from agent_console import (
     load_app_env,
     selected_base_url_value,
     selected_model,
+)
+from history_store import (
+    AgentRunEventRecord,
+    AgentRunRecord,
+    ChatMessageRecord,
+    ChatSessionRecord,
+    HistoryStore,
 )
 from tools import tools
 
@@ -63,10 +70,64 @@ llm = ChatOpenAI(
 )
 
 agent = create_langchain_agent(llm, tools=tools, checkpointer=checkpointer)
+history_store = HistoryStore(DB_PATH)
+history_store.initialize()
 
 STREAM_INPUT_LIMIT = 200
 STREAM_OUTPUT_LIMIT = 500
 STREAM_ERROR_MESSAGE = "Agent 运行失败，请稍后重试。"
+
+
+def get_history_store() -> HistoryStore:
+    return history_store
+
+
+def serialize_session(record: ChatSessionRecord) -> dict[str, object]:
+    return {
+        "sessionId": record.session_id,
+        "title": record.title,
+        "createdAt": record.created_at,
+        "updatedAt": record.updated_at,
+    }
+
+
+def serialize_message(record: ChatMessageRecord) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "messageId": record.message_id,
+        "sessionId": record.session_id,
+        "role": record.role,
+        "content": record.content,
+        "createdAt": record.created_at,
+    }
+    if record.run_id is not None:
+        payload["runId"] = record.run_id
+    return payload
+
+
+def serialize_run(record: AgentRunRecord) -> dict[str, object]:
+    return {
+        "runId": record.run_id,
+        "sessionId": record.session_id,
+        "userMessageId": record.user_message_id,
+        "agentMessageId": record.agent_message_id,
+        "status": record.status,
+        "prompt": record.prompt,
+        "model": record.model,
+        "startedAt": record.started_at,
+        "endedAt": record.ended_at,
+        "errorMessage": record.error_message,
+    }
+
+
+def serialize_run_event(record: AgentRunEventRecord) -> dict[str, object]:
+    return {
+        "eventId": record.event_id,
+        "runId": record.run_id,
+        "sequence": record.sequence,
+        "eventType": record.event_type,
+        "payload": record.payload,
+        "createdAt": record.created_at,
+    }
 
 
 def truncate_stream_value(value: object, limit: int) -> str:
@@ -266,6 +327,54 @@ async def chat_stream(req: ChatRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@app.get("/users/{user_id}/sessions")
+def list_user_sessions(
+    user_id: str,
+    limit: int = 20,
+    store: HistoryStore = Depends(get_history_store),
+):
+    safe_limit = min(max(limit, 1), 100)
+    return [
+        serialize_session(session)
+        for session in store.list_sessions(user_id, safe_limit)
+    ]
+
+
+@app.post("/users/{user_id}/sessions")
+def create_user_session(
+    user_id: str,
+    store: HistoryStore = Depends(get_history_store),
+):
+    return serialize_session(store.create_session(user_id))
+
+
+@app.get("/users/{user_id}/sessions/{session_id}/messages")
+def list_session_messages(
+    user_id: str,
+    session_id: str,
+    store: HistoryStore = Depends(get_history_store),
+):
+    return [
+        serialize_message(message)
+        for message in store.list_messages(user_id, session_id)
+    ]
+
+
+@app.get("/users/{user_id}/runs/{run_id}")
+def get_run_detail(
+    user_id: str,
+    run_id: str,
+    store: HistoryStore = Depends(get_history_store),
+):
+    detail = store.get_run_detail(user_id, run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return {
+        "run": serialize_run(detail.run),
+        "events": [serialize_run_event(event) for event in detail.events],
+    }
 
 
 @app.get("/health")
