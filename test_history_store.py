@@ -79,6 +79,68 @@ class HistoryStoreTests(unittest.TestCase):
         self.assertEqual([message.content for message in user_a_messages], ["from user a"])
         self.assertEqual([message.content for message in user_b_messages], ["from user b"])
 
+    def test_delete_session_removes_only_that_users_history(self):
+        self.store.create_session("user-a", session_id="shared-session")
+        self.store.create_session("user-b", session_id="shared-session")
+        user_a_message = self.store.save_message(
+            "user-a",
+            "shared-session",
+            role="user",
+            content="from user a",
+            message_id="message-user-a",
+        )
+        user_b_message = self.store.save_message(
+            "user-b",
+            "shared-session",
+            role="user",
+            content="from user b",
+            message_id="message-user-b",
+        )
+        self.store.create_run(
+            "user-a",
+            "shared-session",
+            user_message_id=user_a_message.message_id,
+            prompt="from user a",
+            model="model-a",
+            run_id="run-user-a",
+        )
+        self.store.create_run(
+            "user-b",
+            "shared-session",
+            user_message_id=user_b_message.message_id,
+            prompt="from user b",
+            model="model-a",
+            run_id="run-user-b",
+        )
+        self.store.append_run_event(
+            "user-a",
+            "shared-session",
+            "run-user-a",
+            "stage",
+            {"type": "stage", "runId": "run-user-a"},
+        )
+        self.store.append_run_event(
+            "user-b",
+            "shared-session",
+            "run-user-b",
+            "stage",
+            {"type": "stage", "runId": "run-user-b"},
+        )
+
+        deleted = self.store.delete_session("user-a", "shared-session")
+        missing = self.store.delete_session("user-a", "shared-session")
+
+        self.assertTrue(deleted)
+        self.assertFalse(missing)
+        self.assertEqual(self.store.list_sessions("user-a"), [])
+        self.assertEqual(self.store.list_messages("user-a", "shared-session"), [])
+        self.assertIsNone(self.store.get_run_detail("user-a", "run-user-a"))
+        self.assertEqual(
+            [message.content for message in self.store.list_messages("user-b", "shared-session")],
+            ["from user b"],
+        )
+        self.assertIsNotNone(self.store.get_run_detail("user-b", "run-user-b"))
+
     def test_initialize_migrates_legacy_global_session_schema(self):
         legacy_path = Path(self.tmpdir.name) / "legacy.db"
         with sqlite3.connect(legacy_path) as conn:

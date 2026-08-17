@@ -315,6 +315,57 @@ class HistoryStore:
             ).fetchall()
         return [self._session_from_row(row) for row in rows]
 
+    def delete_session(self, user_id: str, session_id: str) -> bool:
+        with self._connect() as conn:
+            session_row = conn.execute(
+                "SELECT 1 FROM chat_sessions WHERE user_id = ? AND session_id = ?",
+                (user_id, session_id),
+            ).fetchone()
+            if session_row is None:
+                return False
+
+            run_rows = conn.execute(
+                """
+                SELECT run_id FROM agent_runs
+                WHERE user_id = ? AND session_id = ?
+                """,
+                (user_id, session_id),
+            ).fetchall()
+            run_ids = [row["run_id"] for row in run_rows]
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                conn.execute(
+                    f"""
+                    DELETE FROM agent_run_events
+                    WHERE user_id = ? AND run_id IN ({placeholders})
+                    """,
+                    (user_id, *run_ids),
+                )
+
+            conn.execute(
+                """
+                DELETE FROM agent_runs
+                WHERE user_id = ? AND session_id = ?
+                """,
+                (user_id, session_id),
+            )
+            conn.execute(
+                """
+                DELETE FROM chat_messages
+                WHERE user_id = ? AND session_id = ?
+                """,
+                (user_id, session_id),
+            )
+            conn.execute(
+                """
+                DELETE FROM chat_sessions
+                WHERE user_id = ? AND session_id = ?
+                """,
+                (user_id, session_id),
+            )
+            conn.commit()
+        return True
+
     def save_message(
         self,
         user_id: str,

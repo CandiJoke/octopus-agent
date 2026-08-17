@@ -10,7 +10,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain.agents import create_agent as create_langchain_agent
@@ -458,6 +458,17 @@ def create_user_session(
     store: HistoryStore = Depends(get_history_store),
 ):
     return serialize_session(store.create_session(user_id))
+
+
+@app.delete("/users/{user_id}/sessions/{session_id}", status_code=204)
+def delete_user_session(
+    user_id: str,
+    session_id: str,
+    store: HistoryStore = Depends(get_history_store),
+):
+    if not store.delete_session(user_id, session_id):
+        raise HTTPException(status_code=404, detail="Session not found")
+    return Response(status_code=204)
 
 
 @app.get("/users/{user_id}/sessions/{session_id}/messages")
