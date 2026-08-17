@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from langchain.agents import create_agent as create_langchain_agent
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from agent_console import (
     checkpointer,
@@ -52,8 +52,17 @@ app.add_middleware(
 # ========== 请求/响应模型 ==========
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     message: str
-    session_id: str = "default"  # 多用户会话隔离
+    user_id: str = Field(
+        default="anonymous_user_default",
+        validation_alias=AliasChoices("userId", "user_id"),
+    )
+    session_id: str = Field(
+        default="default",
+        validation_alias=AliasChoices("sessionId", "session_id"),
+    )
 
 
 class ChatResponse(BaseModel):
@@ -198,6 +207,21 @@ def done_event() -> str:
     return "data: [DONE]\n\n"
 
 
+def with_agent_run_id(payload: dict[str, object], run_id: str) -> dict[str, object]:
+    return {**payload, "runId": run_id}
+
+
+def persist_stream_event(
+    store: HistoryStore,
+    user_id: str,
+    session_id: str,
+    run_id: str,
+    payload: dict[str, object],
+) -> None:
+    event_type = str(payload.get("type", "unknown"))
+    store.append_run_event(user_id, session_id, run_id, event_type, payload)
+
+
 @asynccontextmanager
 async def stream_agent_context(stream_agent=None):
     if stream_agent is not None:
@@ -249,15 +273,46 @@ def chat(req: ChatRequest):
     return ChatResponse(reply=reply, steps=steps)
 
 
-async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterator[str]:
+async def stream_chat_events(
+    req: ChatRequest,
+    stream_agent=None,
+    store: HistoryStore | None = None,
+) -> AsyncIterator[str]:
+    active_store = store or history_store
+    active_store.ensure_session(req.user_id, req.session_id, title="新会话")
+    user_message = active_store.save_message(
+        req.user_id,
+        req.session_id,
+        role="user",
+        content=req.message,
+    )
+    run = active_store.create_run(
+        req.user_id,
+        req.session_id,
+        user_message_id=user_message.message_id,
+        prompt=req.message,
+        model=selected_model(),
+    )
     config = {"configurable": {"thread_id": req.session_id}}
     tool_started_at: dict[str, float] = {}
     answer_started = False
+    answer_parts: list[str] = []
 
-    yield stream_event(make_stage_event("received", "已收到问题"))
+    def emit(payload: dict[str, object]) -> str:
+        event_payload = with_agent_run_id(payload, run.run_id)
+        persist_stream_event(
+            active_store,
+            req.user_id,
+            req.session_id,
+            run.run_id,
+            event_payload,
+        )
+        return stream_event(event_payload)
+
+    yield emit(make_stage_event("received", "已收到问题"))
     try:
         async with stream_agent_context(stream_agent) as active_agent:
-            yield stream_event(make_stage_event("planning", "正在判断是否需要工具"))
+            yield emit(make_stage_event("planning", "正在判断是否需要工具"))
 
             async for event in active_agent.astream_events(
                 {"messages": [("user", req.message)]},
@@ -269,33 +324,37 @@ async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterat
                 if kind == "on_tool_start":
                     tool_name = event["name"]
                     event_run_id = event.get("run_id")
-                    run_id = str(event_run_id) if event_run_id is not None else None
-                    timing_key = run_id or tool_name
+                    tool_run_id = (
+                        str(event_run_id) if event_run_id is not None else None
+                    )
+                    timing_key = tool_run_id or tool_name
                     tool_started_at[timing_key] = time.perf_counter()
-                    yield stream_event(make_stage_event("tooling", f"正在调用 {tool_name}"))
-                    yield stream_event(
+                    yield emit(make_stage_event("tooling", f"正在调用 {tool_name}"))
+                    yield emit(
                         make_tool_start_event(
                             tool_name,
                             event["data"].get("input", ""),
-                            run_id=run_id,
+                            run_id=tool_run_id,
                         )
                     )
 
                 elif kind == "on_tool_end":
                     tool_name = event["name"]
                     event_run_id = event.get("run_id")
-                    run_id = str(event_run_id) if event_run_id is not None else None
-                    timing_key = run_id or tool_name
+                    tool_run_id = (
+                        str(event_run_id) if event_run_id is not None else None
+                    )
+                    timing_key = tool_run_id or tool_name
                     started_at = tool_started_at.pop(timing_key, None)
                     elapsed_ms = None
                     if started_at is not None:
                         elapsed_ms = round((time.perf_counter() - started_at) * 1000)
-                    yield stream_event(
+                    yield emit(
                         make_tool_end_event(
                             tool_name,
                             event["data"].get("output", ""),
                             elapsed_ms=elapsed_ms,
-                            run_id=run_id,
+                            run_id=tool_run_id,
                         )
                     )
 
@@ -305,13 +364,29 @@ async def stream_chat_events(req: ChatRequest, stream_agent=None) -> AsyncIterat
                     if content:
                         if not answer_started:
                             answer_started = True
-                            yield stream_event(make_stage_event("answering", "正在整理最终回答"))
-                        yield stream_event(make_text_event(content))
+                            yield emit(make_stage_event("answering", "正在整理最终回答"))
+                        answer_parts.append(content)
+                        yield emit(make_text_event(content))
 
-            yield stream_event(make_stage_event("completed", "已完成"))
+            final_answer = "".join(answer_parts)
+            if final_answer:
+                agent_message = active_store.save_message(
+                    req.user_id,
+                    req.session_id,
+                    role="agent",
+                    content=final_answer,
+                    run_id=run.run_id,
+                )
+                active_store.complete_run(
+                    req.user_id,
+                    run.run_id,
+                    agent_message.message_id,
+                )
+            yield emit(make_stage_event("completed", "已完成"))
     except Exception:
         logger.exception("Chat stream failed")
-        yield stream_event(make_error_event(STREAM_ERROR_MESSAGE))
+        active_store.fail_run(req.user_id, run.run_id, STREAM_ERROR_MESSAGE)
+        yield emit(make_error_event(STREAM_ERROR_MESSAGE))
     finally:
         yield done_event()
 

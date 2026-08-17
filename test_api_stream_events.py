@@ -1,11 +1,14 @@
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 
 import api_server
+from history_store import HistoryStore
 
 
 def parse_sse_payload(chunk: str) -> dict:
@@ -123,6 +126,29 @@ async def collect_stream(req: api_server.ChatRequest, fake_agent: FakeStreamAgen
     return chunks
 
 
+async def collect_stream_with_store(
+    req: api_server.ChatRequest,
+    fake_agent: FakeStreamAgent,
+    store: HistoryStore,
+):
+    chunks = []
+    async for chunk in api_server.stream_chat_events(
+        req,
+        stream_agent=fake_agent,
+        store=store,
+    ):
+        chunks.append(chunk)
+    return chunks
+
+
+def make_temp_store(test_case) -> HistoryStore:
+    tmpdir = tempfile.TemporaryDirectory()
+    test_case.addCleanup(tmpdir.cleanup)
+    store = HistoryStore(Path(tmpdir.name) / "history.db")
+    store.initialize()
+    return store
+
+
 def json_chunks(chunks: list[str]) -> list[dict]:
     return [
         parse_sse_payload(chunk)
@@ -133,6 +159,7 @@ def json_chunks(chunks: list[str]) -> list[dict]:
 
 class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
     async def test_stream_chat_events_creates_agent_with_async_sqlite_saver(self):
+        store = make_temp_store(self)
         async_saver = object()
         saver_context = FakeAsyncSaverContext(async_saver)
         stream_agent = FakeStreamAgent(
@@ -143,7 +170,11 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
                 },
             ]
         )
-        req = api_server.ChatRequest(message="hello", session_id="async-saver-test")
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="async-saver-test",
+        )
 
         with (
             mock.patch.object(
@@ -157,16 +188,24 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
                 return_value=stream_agent,
             ) as create_agent,
         ):
-            chunks = [chunk async for chunk in api_server.stream_chat_events(req)]
+            chunks = [
+                chunk
+                async for chunk in api_server.stream_chat_events(req, store=store)
+            ]
 
         payloads = json_chunks(chunks)
+        run_id = payloads[0]["runId"]
         self.assertEqual(chunks[-1], api_server.done_event())
         self.assertEqual(
             [payload["type"] for payload in payloads],
             ["stage", "stage", "stage", "text", "stage"],
         )
+        self.assertTrue(all(payload["runId"] == run_id for payload in payloads))
         self.assertEqual(payloads[2]["stage"], "answering")
-        self.assertEqual(payloads[3], {"type": "text", "content": "流式回答"})
+        self.assertEqual(
+            payloads[3],
+            {"type": "text", "content": "流式回答", "runId": run_id},
+        )
         self.assertEqual(payloads[4]["stage"], "completed")
         self.assertFalse(any(payload["type"] == "error" for payload in payloads))
         create_saver.assert_called_once_with(str(api_server.DB_PATH))
@@ -179,6 +218,7 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(saver_context.exited)
 
     async def test_stream_chat_events_emits_stages_tools_text_and_done(self):
+        store = make_temp_store(self)
         fake_agent = FakeStreamAgent(
             [
                 {
@@ -199,10 +239,15 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
                 },
             ]
         )
-        req = api_server.ChatRequest(message="帮我算 2+3", session_id="session-test")
+        req = api_server.ChatRequest(
+            message="帮我算 2+3",
+            user_id="user-stream",
+            session_id="session-test",
+        )
 
-        chunks = await collect_stream(req, fake_agent)
+        chunks = await collect_stream_with_store(req, fake_agent, store)
         payloads = json_chunks(chunks)
+        run_id = payloads[0]["runId"]
 
         self.assertEqual(chunks[-1], api_server.done_event())
         self.assertEqual(
@@ -218,6 +263,7 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
                 "stage",
             ],
         )
+        self.assertTrue(all(payload["runId"] == run_id for payload in payloads))
         self.assertEqual(payloads[0]["stage"], "received")
         self.assertEqual(payloads[1]["stage"], "planning")
         self.assertEqual(payloads[2]["stage"], "tooling")
@@ -236,6 +282,7 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_agent.version, "v2")
 
     async def test_parallel_same_name_tools_keep_run_ids_and_timings(self):
+        store = make_temp_store(self)
         fake_agent = FakeStreamAgent(
             [
                 {
@@ -264,20 +311,28 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
                 },
             ]
         )
-        req = api_server.ChatRequest(message="search", session_id="parallel-tools")
+        req = api_server.ChatRequest(
+            message="search",
+            user_id="user-stream",
+            session_id="parallel-tools",
+        )
 
         with mock.patch.object(
             api_server.time,
             "perf_counter",
             side_effect=[1.0, 2.0, 3.0, 5.0],
         ):
-            payloads = json_chunks(await collect_stream(req, fake_agent))
+            payloads = json_chunks(
+                await collect_stream_with_store(req, fake_agent, store)
+            )
 
         tool_events = [
             payload
             for payload in payloads
             if payload["type"] in {"tool_start", "tool_end"}
         ]
+        agent_run_id = payloads[0]["runId"]
+        self.assertTrue(all(payload["runId"] == agent_run_id for payload in payloads))
         self.assertEqual(
             [payload["run_id"] for payload in tool_events],
             ["search-run-a", "search-run-b", "search-run-a", "search-run-b"],
@@ -287,25 +342,104 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
             [2000, 3000],
         )
 
+    async def test_stream_chat_events_persists_run_messages_and_events(self):
+        store = make_temp_store(self)
+        fake_agent = FakeStreamAgent(
+            [
+                {
+                    "event": "on_tool_start",
+                    "name": "calculator",
+                    "run_id": "tool-run-1",
+                    "data": {"input": {"expression": "2+3"}},
+                },
+                {
+                    "event": "on_tool_end",
+                    "name": "calculator",
+                    "run_id": "tool-run-1",
+                    "data": {"output": "2+3 = 5"},
+                },
+                {
+                    "event": "on_chat_model_stream",
+                    "data": {"chunk": FakeChunk("答案")},
+                },
+            ]
+        )
+        req = api_server.ChatRequest(
+            message="帮我算 2+3",
+            user_id="user-stream",
+            session_id="session-stream",
+        )
+
+        payloads = json_chunks(await collect_stream_with_store(req, fake_agent, store))
+        run_id = payloads[0]["runId"]
+        detail = store.get_run_detail("user-stream", run_id)
+        messages = store.list_messages("user-stream", "session-stream")
+
+        self.assertTrue(run_id.startswith("run_"))
+        self.assertTrue(all(payload["runId"] == run_id for payload in payloads))
+        self.assertEqual(payloads[3]["run_id"], "tool-run-1")
+        self.assertEqual([message.role for message in messages], ["user", "agent"])
+        self.assertEqual(messages[0].content, "帮我算 2+3")
+        self.assertEqual(messages[1].content, "答案")
+        self.assertEqual(messages[1].run_id, run_id)
+        self.assertEqual(detail.run.status, "completed")
+        self.assertEqual(
+            [event.sequence for event in detail.events],
+            list(range(1, len(detail.events) + 1)),
+        )
+
     async def test_stream_chat_events_emits_safe_error_before_done(self):
+        store = make_temp_store(self)
         raw_error = "provider https://secret.example failed for /private/agent_hub.db"
         fake_agent = FakeStreamAgent([], error=RuntimeError(raw_error))
-        req = api_server.ChatRequest(message="hello", session_id="session-error")
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="session-error",
+        )
 
         with mock.patch.object(api_server.logger, "exception") as log_exception:
-            chunks = await collect_stream(req, fake_agent)
+            chunks = await collect_stream_with_store(req, fake_agent, store)
         payloads = json_chunks(chunks)
+        run_id = payloads[0]["runId"]
 
         self.assertEqual(chunks[-1], api_server.done_event())
         self.assertEqual(
             payloads[-1],
-            {"type": "error", "message": api_server.STREAM_ERROR_MESSAGE},
+            {
+                "type": "error",
+                "message": api_server.STREAM_ERROR_MESSAGE,
+                "runId": run_id,
+            },
         )
         self.assertNotIn(raw_error, "".join(chunks))
         log_exception.assert_called_once_with("Chat stream failed")
 
+    async def test_stream_chat_events_marks_persisted_run_failed(self):
+        store = make_temp_store(self)
+        fake_agent = FakeStreamAgent([], error=RuntimeError("provider secret"))
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="session-error",
+        )
+
+        with mock.patch.object(api_server.logger, "exception"):
+            payloads = json_chunks(await collect_stream_with_store(req, fake_agent, store))
+        run_id = payloads[0]["runId"]
+        detail = store.get_run_detail("user-stream", run_id)
+
+        self.assertEqual(payloads[-1]["type"], "error")
+        self.assertEqual(detail.run.status, "failed")
+        self.assertEqual(detail.run.error_message, api_server.STREAM_ERROR_MESSAGE)
+
     async def test_received_is_emitted_before_checkpoint_initialization_failure(self):
-        req = api_server.ChatRequest(message="hello", session_id="context-error")
+        store = make_temp_store(self)
+        req = api_server.ChatRequest(
+            message="hello",
+            user_id="user-stream",
+            session_id="context-error",
+        )
 
         with (
             mock.patch.object(
@@ -315,13 +449,21 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
             ),
             mock.patch.object(api_server.logger, "exception") as log_exception,
         ):
-            chunks = [chunk async for chunk in api_server.stream_chat_events(req)]
+            chunks = [
+                chunk
+                async for chunk in api_server.stream_chat_events(req, store=store)
+            ]
 
         payloads = json_chunks(chunks)
+        run_id = payloads[0]["runId"]
         self.assertEqual(payloads[0]["stage"], "received")
         self.assertEqual(
             payloads[1],
-            {"type": "error", "message": api_server.STREAM_ERROR_MESSAGE},
+            {
+                "type": "error",
+                "message": api_server.STREAM_ERROR_MESSAGE,
+                "runId": run_id,
+            },
         )
         self.assertEqual(chunks[-1], api_server.done_event())
         self.assertFalse(any(payload.get("stage") == "planning" for payload in payloads))
