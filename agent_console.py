@@ -15,6 +15,7 @@ import sqlite3
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 
+from agent_context import AGENT_SYSTEM_PROMPT
 from tools import tools
 
 DEFAULT_MODEL = "deepseek-v4-flash"
@@ -153,7 +154,12 @@ def create_agent():
     )
     # 创建 ReAct Agent（Reasoning + Acting）
     # ReAct = 先思考 → 再行动（调工具）→ 观察结果 → 再思考 → 最终回答
-    return create_langchain_agent(llm, tools=tools, checkpointer=checkpointer)
+    return create_langchain_agent(
+        llm,
+        tools=tools,
+        checkpointer=checkpointer,
+        system_prompt=AGENT_SYSTEM_PROMPT,
+    )
 
 
 # ========== 交互式运行 ==========

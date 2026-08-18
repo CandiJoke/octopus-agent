@@ -26,6 +26,7 @@ from agent_console import (
     selected_base_url_value,
     selected_model,
 )
+from agent_context import AGENT_SYSTEM_PROMPT
 from capabilities import build_capability_catalog
 from history_store import (
     AgentRunEventRecord,
@@ -36,6 +37,7 @@ from history_store import (
     new_id,
 )
 from tools import tools
+from skills import build_skill_catalog, get_skill, serialize_skill_detail
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +84,12 @@ llm = ChatOpenAI(
     base_url=selected_base_url_value(),
 )
 
-agent = create_langchain_agent(llm, tools=tools, checkpointer=checkpointer)
+agent = create_langchain_agent(
+    llm,
+    tools=tools,
+    checkpointer=checkpointer,
+    system_prompt=AGENT_SYSTEM_PROMPT,
+)
 history_store = HistoryStore(DB_PATH)
 history_store.initialize()
 
@@ -256,6 +263,7 @@ async def stream_agent_context(stream_agent=None):
             llm,
             tools=tools,
             checkpointer=async_checkpointer,
+            system_prompt=AGENT_SYSTEM_PROMPT,
         )
 
 
@@ -523,6 +531,19 @@ def list_user_sessions(
 @app.get("/capabilities")
 def list_capabilities():
     return build_capability_catalog()
+
+
+@app.get("/skills")
+def list_skill_catalog():
+    return build_skill_catalog()
+
+
+@app.get("/skills/{skill_id}")
+def get_skill_detail(skill_id: str):
+    skill = get_skill(skill_id)
+    if skill is None:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return serialize_skill_detail(skill)
 
 
 @app.post("/users/{user_id}/sessions")

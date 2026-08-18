@@ -114,6 +114,8 @@ class AgentConsoleConfigTests(unittest.TestCase):
         self.assertEqual(agent, "agent")
         self.assertIn("checkpointer", create.call_args.kwargs)
         self.assertIs(create.call_args.kwargs["checkpointer"], agent_console.checkpointer)
+        self.assertIn("system_prompt", create.call_args.kwargs)
+        self.assertIn("Math Problem Solver", create.call_args.kwargs["system_prompt"])
 
     @patch.dict(
         os.environ,

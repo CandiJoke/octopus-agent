@@ -237,6 +237,7 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
             api_server.llm,
             tools=api_server.tools,
             checkpointer=async_saver,
+            system_prompt=api_server.AGENT_SYSTEM_PROMPT,
         )
         self.assertTrue(saver_context.entered)
         self.assertTrue(saver_context.exited)
