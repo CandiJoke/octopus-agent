@@ -36,6 +36,7 @@ from history_store import (
     HistoryStore,
     new_id,
 )
+from learning_context import current_learning_context, learning_run_context
 from learning_store import (
     DEFAULT_CHILD_ID,
     LearningStore,
@@ -302,10 +303,11 @@ def chat(req: ChatRequest):
     config = {"configurable": {"thread_id": agent_thread_id(req.user_id, req.session_id)}}
 
     # Agent 执行
-    result = agent.invoke(
-        {"messages": [("user", req.message)]},
-        config=config,
-    )
+    with learning_run_context(req.user_id, DEFAULT_CHILD_ID, None):
+        result = agent.invoke(
+            {"messages": [("user", req.message)]},
+            config=config,
+        )
 
     # 提取最终回答
     final_msg = result["messages"][-1]
@@ -434,59 +436,64 @@ async def stream_chat_events(
         async with stream_agent_context(stream_agent) as active_agent:
             yield emit(make_stage_event("planning", "正在判断是否需要工具"))
 
-            async for event in active_agent.astream_events(
-                {"messages": [("user", req.message)]},
-                config=config,
-                version="v2",
-            ):
-                kind = event.get("event", "")
+            with learning_run_context(req.user_id, DEFAULT_CHILD_ID, run_id):
+                async for event in active_agent.astream_events(
+                    {"messages": [("user", req.message)]},
+                    config=config,
+                    version="v2",
+                ):
+                    kind = event.get("event", "")
 
-                if kind == "on_tool_start":
-                    tool_name = event["name"]
-                    event_run_id = event.get("run_id")
-                    tool_run_id = (
-                        str(event_run_id) if event_run_id is not None else None
-                    )
-                    timing_key = tool_run_id or tool_name
-                    tool_started_at[timing_key] = time.perf_counter()
-                    yield emit(make_stage_event("tooling", f"正在调用 {tool_name}"))
-                    yield emit(
-                        make_tool_start_event(
-                            tool_name,
-                            event["data"].get("input", ""),
-                            run_id=tool_run_id,
+                    if kind == "on_tool_start":
+                        tool_name = event["name"]
+                        event_run_id = event.get("run_id")
+                        tool_run_id = (
+                            str(event_run_id) if event_run_id is not None else None
                         )
-                    )
-
-                elif kind == "on_tool_end":
-                    tool_name = event["name"]
-                    event_run_id = event.get("run_id")
-                    tool_run_id = (
-                        str(event_run_id) if event_run_id is not None else None
-                    )
-                    timing_key = tool_run_id or tool_name
-                    started_at = tool_started_at.pop(timing_key, None)
-                    elapsed_ms = None
-                    if started_at is not None:
-                        elapsed_ms = round((time.perf_counter() - started_at) * 1000)
-                    yield emit(
-                        make_tool_end_event(
-                            tool_name,
-                            event["data"].get("output", ""),
-                            elapsed_ms=elapsed_ms,
-                            run_id=tool_run_id,
+                        timing_key = tool_run_id or tool_name
+                        tool_started_at[timing_key] = time.perf_counter()
+                        yield emit(make_stage_event("tooling", f"正在调用 {tool_name}"))
+                        yield emit(
+                            make_tool_start_event(
+                                tool_name,
+                                event["data"].get("input", ""),
+                                run_id=tool_run_id,
+                            )
                         )
-                    )
 
-                elif kind == "on_chat_model_stream":
-                    chunk = event["data"]["chunk"]
-                    content = getattr(chunk, "content", "")
-                    if content:
-                        if not answer_started:
-                            answer_started = True
-                            yield emit(make_stage_event("answering", "正在整理最终回答"))
-                        answer_parts.append(content)
-                        yield emit(make_text_event(content))
+                    elif kind == "on_tool_end":
+                        tool_name = event["name"]
+                        event_run_id = event.get("run_id")
+                        tool_run_id = (
+                            str(event_run_id) if event_run_id is not None else None
+                        )
+                        timing_key = tool_run_id or tool_name
+                        started_at = tool_started_at.pop(timing_key, None)
+                        elapsed_ms = None
+                        if started_at is not None:
+                            elapsed_ms = round(
+                                (time.perf_counter() - started_at) * 1000
+                            )
+                        yield emit(
+                            make_tool_end_event(
+                                tool_name,
+                                event["data"].get("output", ""),
+                                elapsed_ms=elapsed_ms,
+                                run_id=tool_run_id,
+                            )
+                        )
+
+                    elif kind == "on_chat_model_stream":
+                        chunk = event["data"]["chunk"]
+                        content = getattr(chunk, "content", "")
+                        if content:
+                            if not answer_started:
+                                answer_started = True
+                                yield emit(
+                                    make_stage_event("answering", "正在整理最终回答")
+                                )
+                            answer_parts.append(content)
+                            yield emit(make_text_event(content))
 
             final_answer = "".join(answer_parts)
             if history_persistence_enabled:

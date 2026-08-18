@@ -182,6 +182,29 @@ class StreamChatEventsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(user_a_thread, user_b_thread)
         self.assertNotEqual(user_a_thread, other_session_thread)
 
+    async def test_stream_chat_events_sets_learning_context_for_agent_tools(self):
+        class ContextCapturingAgent(FakeStreamAgent):
+            async def astream_events(self, payload, config=None, version=None):
+                self.context_seen = api_server.current_learning_context()
+                if False:
+                    yield {}
+
+        store = make_temp_store(self)
+        agent = ContextCapturingAgent([])
+        req = api_server.ChatRequest(
+            message="孩子拼音混淆",
+            user_id="user-learning",
+            session_id="session-learning",
+        )
+
+        chunks = await collect_stream_with_store(req, agent, store)
+
+        self.assertEqual(chunks[-1], api_server.done_event())
+        self.assertIsNotNone(agent.context_seen)
+        self.assertEqual(agent.context_seen.user_id, "user-learning")
+        self.assertEqual(agent.context_seen.child_id, api_server.DEFAULT_CHILD_ID)
+        self.assertIsNotNone(agent.context_seen.source_run_id)
+
     async def test_stream_chat_events_creates_agent_with_async_sqlite_saver(self):
         store = make_temp_store(self)
         async_saver = object()

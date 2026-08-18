@@ -27,8 +27,10 @@ class CapabilityApiTests(unittest.TestCase):
             [
                 "tool.calculator",
                 "tool.search_knowledge",
+                "tool.record_chinese_literacy_weakness",
                 "skill.math_problem_solver",
                 "skill.knowledge_lookup",
+                "skill.chinese_literacy_support",
             ],
         )
 
@@ -42,7 +44,12 @@ class CapabilityApiTests(unittest.TestCase):
         self.assertTrue(calculator["enabled"])
         self.assertIn("数学计算", calculator["description"])
 
-        math_skill = capabilities[2]
+        record_tool = capabilities[2]
+        self.assertEqual(record_tool["type"], "tool")
+        self.assertEqual(record_tool["name"], "record_chinese_literacy_weakness")
+        self.assertEqual(record_tool["category"], "学习记录")
+
+        math_skill = capabilities[3]
         self.assertEqual(math_skill["type"], "skill")
         self.assertEqual(math_skill["name"], "math_problem_solver")
         self.assertEqual(math_skill["displayName"], "Math Problem Solver")
@@ -51,6 +58,14 @@ class CapabilityApiTests(unittest.TestCase):
         self.assertEqual(math_skill["source"], "local")
         self.assertTrue(math_skill["enabled"])
         self.assertEqual(math_skill["tools"], ["calculator"])
+
+        chinese_skill = capabilities[5]
+        self.assertEqual(chinese_skill["type"], "skill")
+        self.assertEqual(chinese_skill["name"], "chinese_literacy_support")
+        self.assertEqual(
+            chinese_skill["tools"],
+            ["record_chinese_literacy_weakness"],
+        )
 
     def test_skills_endpoint_lists_skill_details(self):
         response = self.client.get("/skills")
@@ -62,7 +77,11 @@ class CapabilityApiTests(unittest.TestCase):
         skills = payload["skills"]
         self.assertEqual(
             [skill["id"] for skill in skills],
-            ["math_problem_solver", "knowledge_lookup"],
+            [
+                "math_problem_solver",
+                "knowledge_lookup",
+                "chinese_literacy_support",
+            ],
         )
 
         math_skill = skills[0]

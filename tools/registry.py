@@ -6,6 +6,9 @@ from langchain_core.tools import StructuredTool
 
 from tools.calculator.calculator import run as calculator_run
 from tools.loader import load_tool_meta
+from tools.record_chinese_literacy_weakness.record_chinese_literacy_weakness import (
+    run as record_chinese_literacy_weakness_run,
+)
 from tools.search_knowledge.search_knowledge import run as search_knowledge_run
 
 TOOLS_DIR = Path(__file__).parent
@@ -21,6 +24,11 @@ class ToolSpec:
 TOOL_SPECS = (
     ToolSpec("calculator", calculator_run, "基础工具"),
     ToolSpec("search_knowledge", search_knowledge_run, "知识检索"),
+    ToolSpec(
+        "record_chinese_literacy_weakness",
+        record_chinese_literacy_weakness_run,
+        "学习记录",
+    ),
 )
 
 

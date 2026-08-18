@@ -13,7 +13,14 @@ class ToolsLoaderTests(unittest.TestCase):
 
     def test_tools_list_has_expected_names(self):
         names = {tool.name for tool in tools}
-        self.assertEqual(names, {"calculator", "search_knowledge"})
+        self.assertEqual(
+            names,
+            {
+                "calculator",
+                "search_knowledge",
+                "record_chinese_literacy_weakness",
+            },
+        )
 
     def test_calculator_tool_runs(self):
         calculator = next(tool for tool in tools if tool.name == "calculator")
