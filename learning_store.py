@@ -14,12 +14,22 @@ DEFAULT_CHILD_DISPLAY_NAME = "孩子"
 DEFAULT_GRADE = "first_grade"
 DEFAULT_SUBJECT = "chinese"
 
+LearningSubject = Literal["chinese", "english", "math"]
+LearningSubjectInput = Literal["chinese", "english", "math", "语文", "英语", "数学"]
 WeaknessCategory = Literal[
     "pinyin",
     "character_recognition",
     "reading",
     "expression",
     "learning_habit",
+    "listening",
+    "phonics",
+    "vocabulary",
+    "speaking",
+    "number_sense",
+    "calculation",
+    "word_problem",
+    "geometry",
 ]
 WeaknessSeverity = Literal["mild", "medium", "high"]
 WeaknessStatus = Literal["active", "improving", "resolved"]
@@ -39,6 +49,29 @@ WeaknessCategoryInput = Literal[
     "口语表达",
     "学习习惯",
     "习惯",
+    "listening",
+    "听音",
+    "听音辨音",
+    "phonics",
+    "自然拼读",
+    "字母",
+    "vocabulary",
+    "词汇",
+    "单词",
+    "speaking",
+    "口语",
+    "number_sense",
+    "number-sense",
+    "数感",
+    "calculation",
+    "计算",
+    "口算",
+    "word_problem",
+    "word-problem",
+    "应用题",
+    "geometry",
+    "图形空间",
+    "图形",
 ]
 WeaknessSeverityInput = Literal[
     "mild",
@@ -53,34 +86,79 @@ WeaknessSeverityInput = Literal[
     "重度",
 ]
 
-VALID_CATEGORIES = {
-    "pinyin",
-    "character_recognition",
-    "reading",
-    "expression",
-    "learning_habit",
-}
+VALID_SUBJECTS = {"chinese", "english", "math"}
 VALID_SEVERITIES = {"mild", "medium", "high"}
 VALID_STATUSES = {"active", "improving", "resolved"}
-CATEGORY_ALIASES = {
-    "pinyin": "pinyin",
-    "拼音": "pinyin",
-    "拼读": "pinyin",
-    "character_recognition": "character_recognition",
-    "character-recognition": "character_recognition",
-    "识字": "character_recognition",
-    "认字": "character_recognition",
-    "reading": "reading",
-    "朗读": "reading",
-    "阅读": "reading",
-    "expression": "expression",
-    "表达": "expression",
-    "口语表达": "expression",
-    "learning_habit": "learning_habit",
-    "learning-habit": "learning_habit",
-    "学习习惯": "learning_habit",
-    "习惯": "learning_habit",
+SUBJECT_ALIASES = {
+    "chinese": "chinese",
+    "语文": "chinese",
+    "english": "english",
+    "英语": "english",
+    "math": "math",
+    "数学": "math",
 }
+SUBJECT_CATEGORY_ALIASES = {
+    "chinese": {
+        "pinyin": "pinyin",
+        "拼音": "pinyin",
+        "拼读": "pinyin",
+        "character_recognition": "character_recognition",
+        "character-recognition": "character_recognition",
+        "识字": "character_recognition",
+        "认字": "character_recognition",
+        "reading": "reading",
+        "朗读": "reading",
+        "阅读": "reading",
+        "expression": "expression",
+        "表达": "expression",
+        "口语表达": "expression",
+        "learning_habit": "learning_habit",
+        "learning-habit": "learning_habit",
+        "学习习惯": "learning_habit",
+        "习惯": "learning_habit",
+    },
+    "english": {
+        "listening": "listening",
+        "听音": "listening",
+        "听音辨音": "listening",
+        "phonics": "phonics",
+        "自然拼读": "phonics",
+        "字母": "phonics",
+        "vocabulary": "vocabulary",
+        "词汇": "vocabulary",
+        "单词": "vocabulary",
+        "speaking": "speaking",
+        "口语": "speaking",
+        "口语表达": "speaking",
+        "learning_habit": "learning_habit",
+        "learning-habit": "learning_habit",
+        "学习习惯": "learning_habit",
+        "习惯": "learning_habit",
+    },
+    "math": {
+        "number_sense": "number_sense",
+        "number-sense": "number_sense",
+        "数感": "number_sense",
+        "calculation": "calculation",
+        "计算": "calculation",
+        "口算": "calculation",
+        "word_problem": "word_problem",
+        "word-problem": "word_problem",
+        "应用题": "word_problem",
+        "geometry": "geometry",
+        "图形空间": "geometry",
+        "图形": "geometry",
+        "learning_habit": "learning_habit",
+        "learning-habit": "learning_habit",
+        "学习习惯": "learning_habit",
+        "习惯": "learning_habit",
+    },
+}
+VALID_CATEGORIES_BY_SUBJECT = {
+    subject: set(aliases.values())
+    for subject, aliases in SUBJECT_CATEGORY_ALIASES.items()
+}
+VALID_CATEGORIES = set().union(*VALID_CATEGORIES_BY_SUBJECT.values())
 SEVERITY_ALIASES = {
     "mild": "mild",
     "轻微": "mild",
@@ -170,11 +248,24 @@ def normalize_title(title: str) -> str:
     return " ".join(title.strip().split()).lower()
 
 
-def normalize_category_value(category: str) -> str:
-    key = " ".join(str(category).strip().split())
-    normalized = CATEGORY_ALIASES.get(key) or CATEGORY_ALIASES.get(key.lower())
+def normalize_subject_value(subject: str) -> str:
+    key = " ".join(str(subject).strip().split())
+    normalized = SUBJECT_ALIASES.get(key) or SUBJECT_ALIASES.get(key.lower())
     if normalized is None:
-        raise ValueError(f"unsupported weakness category: {category}")
+        raise ValueError(f"unsupported learning subject: {subject}")
+    return normalized
+
+
+def normalize_category_value(subject: str, category: str | None = None) -> str:
+    if category is None:
+        category = subject
+        subject = DEFAULT_SUBJECT
+    subject = normalize_subject_value(subject)
+    key = " ".join(str(category).strip().split())
+    aliases = SUBJECT_CATEGORY_ALIASES[subject]
+    normalized = aliases.get(key) or aliases.get(key.lower())
+    if normalized is None:
+        raise ValueError(f"unsupported {subject} weakness category: {category}")
     return normalized
 
 
@@ -194,7 +285,7 @@ def sanitize_learning_text(text: str) -> str:
 
 
 def validate_category(category: str) -> None:
-    normalize_category_value(category)
+    normalize_category_value(DEFAULT_SUBJECT, category)
 
 
 def validate_severity(severity: str) -> None:
@@ -249,7 +340,15 @@ class LearningStore:
                         'character_recognition',
                         'reading',
                         'expression',
-                        'learning_habit'
+                        'learning_habit',
+                        'listening',
+                        'phonics',
+                        'vocabulary',
+                        'speaking',
+                        'number_sense',
+                        'calculation',
+                        'word_problem',
+                        'geometry'
                     )
                 ),
                 title TEXT NOT NULL,
@@ -263,6 +362,83 @@ class LearningStore:
                 FOREIGN KEY(user_id, child_id)
                     REFERENCES child_profiles(user_id, child_id)
             );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_weakness_active_unique
+                ON learning_weaknesses(
+                    user_id, child_id, subject, category, normalized_title
+                )
+                WHERE status = 'active';
+
+            CREATE INDEX IF NOT EXISTS idx_learning_weaknesses_user_child_status
+                ON learning_weaknesses(user_id, child_id, status, updated_at DESC);
+            """
+        )
+        self._migrate_learning_weaknesses_schema(conn)
+
+    def _migrate_learning_weaknesses_schema(self, conn: sqlite3.Connection) -> None:
+        row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'learning_weaknesses'
+            """
+        ).fetchone()
+        if row is None or "phonics" in str(row["sql"]):
+            return
+
+        conn.executescript(
+            """
+            ALTER TABLE learning_weaknesses RENAME TO learning_weaknesses_old;
+            DROP INDEX IF EXISTS idx_learning_weakness_active_unique;
+            DROP INDEX IF EXISTS idx_learning_weaknesses_user_child_status;
+
+            CREATE TABLE learning_weaknesses (
+                weakness_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                child_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                grade TEXT NOT NULL,
+                category TEXT NOT NULL CHECK (
+                    category IN (
+                        'pinyin',
+                        'character_recognition',
+                        'reading',
+                        'expression',
+                        'learning_habit',
+                        'listening',
+                        'phonics',
+                        'vocabulary',
+                        'speaking',
+                        'number_sense',
+                        'calculation',
+                        'word_problem',
+                        'geometry'
+                    )
+                ),
+                title TEXT NOT NULL,
+                normalized_title TEXT NOT NULL,
+                evidence TEXT NOT NULL,
+                severity TEXT NOT NULL CHECK (severity IN ('mild', 'medium', 'high')),
+                status TEXT NOT NULL CHECK (status IN ('active', 'improving', 'resolved')),
+                source_run_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id, child_id)
+                    REFERENCES child_profiles(user_id, child_id)
+            );
+
+            INSERT INTO learning_weaknesses(
+                weakness_id, user_id, child_id, subject, grade, category,
+                title, normalized_title, evidence, severity, status,
+                source_run_id, created_at, updated_at
+            )
+            SELECT
+                weakness_id, user_id, child_id, subject, grade, category,
+                title, normalized_title, evidence, severity, status,
+                source_run_id, created_at, updated_at
+            FROM learning_weaknesses_old;
+
+            DROP TABLE learning_weaknesses_old;
 
             CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_weakness_active_unique
                 ON learning_weaknesses(
@@ -319,6 +495,7 @@ class LearningStore:
         user_id: str,
         child_id: str = DEFAULT_CHILD_ID,
         status: str | None = None,
+        subject: str | None = None,
     ) -> list[LearningWeaknessRecord]:
         params: list[str] = [user_id, child_id]
         where_status = ""
@@ -326,6 +503,11 @@ class LearningStore:
             validate_status(status)
             where_status = "AND status = ?"
             params.append(status)
+        where_subject = ""
+        if subject is not None:
+            subject = normalize_subject_value(subject)
+            where_subject = "AND subject = ?"
+            params.append(subject)
 
         with self._connect() as conn:
             rows = conn.execute(
@@ -337,6 +519,7 @@ class LearningStore:
                 FROM learning_weaknesses
                 WHERE user_id = ? AND child_id = ?
                 {where_status}
+                {where_subject}
                 ORDER BY
                     CASE status
                         WHEN 'active' THEN 0
@@ -359,8 +542,10 @@ class LearningStore:
         evidence: str,
         severity: str,
         source_run_id: str | None = None,
+        subject: str = DEFAULT_SUBJECT,
     ) -> tuple[LearningWeaknessRecord, bool]:
-        category = normalize_category_value(category)
+        subject = normalize_subject_value(subject)
+        category = normalize_category_value(subject, category)
         severity = normalize_severity_value(severity)
         safe_title = sanitize_learning_text(title)
         safe_evidence = sanitize_learning_text(evidence)
@@ -385,7 +570,7 @@ class LearningStore:
                     AND normalized_title = ?
                     AND status = 'active'
                 """,
-                (user_id, child_id, DEFAULT_SUBJECT, category, normalized_title),
+                (user_id, child_id, subject, category, normalized_title),
             ).fetchone()
 
             if existing is not None:
@@ -429,7 +614,7 @@ class LearningStore:
                         weakness_id,
                         user_id,
                         child_id,
-                        DEFAULT_SUBJECT,
+                        subject,
                         DEFAULT_GRADE,
                         category,
                         safe_title,
@@ -458,7 +643,7 @@ class LearningStore:
                         AND normalized_title = ?
                         AND status = 'active'
                     """,
-                    (user_id, child_id, DEFAULT_SUBJECT, category, normalized_title),
+                    (user_id, child_id, subject, category, normalized_title),
                 ).fetchone()
                 if existing is None:
                     raise

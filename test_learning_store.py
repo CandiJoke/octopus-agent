@@ -108,6 +108,149 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(record.category, "pinyin")
         self.assertEqual(record.severity, "medium")
 
+    def test_upsert_weakness_accepts_english_and_math_subjects(self):
+        english, english_created = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="english",
+            category="phonics",
+            title="b/d 字母认反",
+            evidence="家长反馈孩子经常把 b 和 d 看反。",
+            severity="medium",
+        )
+        math, math_created = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="math",
+            category="calculation",
+            title="20 以内加减法慢",
+            evidence="做 20 以内加减法常要数手指。",
+            severity="high",
+        )
+
+        self.assertTrue(english_created)
+        self.assertTrue(math_created)
+        self.assertEqual(english.subject, "english")
+        self.assertEqual(english.category, "phonics")
+        self.assertEqual(math.subject, "math")
+        self.assertEqual(math.category, "calculation")
+
+    def test_list_weaknesses_filters_by_subject(self):
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="english",
+            category="vocabulary",
+            title="单词容易忘",
+            evidence="学过的单词隔天就忘。",
+            severity="medium",
+        )
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="math",
+            category="number_sense",
+            title="数感弱",
+            evidence="数量比较要数很久。",
+            severity="mild",
+        )
+
+        english_records = self.store.list_weaknesses("user-a", subject="english")
+        math_records = self.store.list_weaknesses("user-a", subject="math")
+
+        self.assertEqual([item.subject for item in english_records], ["english"])
+        self.assertEqual([item.subject for item in math_records], ["math"])
+
+    def test_category_must_match_subject(self):
+        with self.assertRaises(ValueError):
+            self.store.upsert_weakness(
+                "user-a",
+                DEFAULT_CHILD_ID,
+                subject="math",
+                category="pinyin",
+                title="拼音不属于数学",
+                evidence="分类错配。",
+                severity="medium",
+            )
+
+    def test_subject_and_category_aliases_are_normalized(self):
+        record, created = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="数学",
+            category="计算",
+            title="口算慢",
+            evidence="口算 10 以内加法也会停很久。",
+            severity="明显",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(record.subject, "math")
+        self.assertEqual(record.category, "calculation")
+        self.assertEqual(record.severity, "high")
+
+    def test_old_chinese_only_schema_is_migrated_for_new_subjects(self):
+        old_db_path = Path(self.temp_dir.name) / "old-learning.db"
+        with sqlite3.connect(str(old_db_path)) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE child_profiles (
+                    user_id TEXT NOT NULL,
+                    child_id TEXT NOT NULL,
+                    display_name TEXT NOT NULL,
+                    grade TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(user_id, child_id)
+                );
+
+                CREATE TABLE learning_weaknesses (
+                    weakness_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    child_id TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    grade TEXT NOT NULL,
+                    category TEXT NOT NULL CHECK (
+                        category IN (
+                            'pinyin',
+                            'character_recognition',
+                            'reading',
+                            'expression',
+                            'learning_habit'
+                        )
+                    ),
+                    title TEXT NOT NULL,
+                    normalized_title TEXT NOT NULL,
+                    evidence TEXT NOT NULL,
+                    severity TEXT NOT NULL CHECK (severity IN ('mild', 'medium', 'high')),
+                    status TEXT NOT NULL CHECK (status IN ('active', 'improving', 'resolved')),
+                    source_run_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(user_id, child_id)
+                        REFERENCES child_profiles(user_id, child_id)
+                );
+                """
+            )
+            conn.commit()
+
+        migrated_store = LearningStore(old_db_path)
+        migrated_store.initialize()
+
+        record, created = migrated_store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="english",
+            category="phonics",
+            title="b/d 字母认反",
+            evidence="经常把 b 和 d 看反。",
+            severity="medium",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(record.subject, "english")
+        self.assertEqual(record.category, "phonics")
+
     def test_sensitive_learning_text_is_redacted_before_storage(self):
         record, _ = self.store.upsert_weakness(
             "user-a",
