@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from tools import tools
@@ -30,6 +31,20 @@ class ToolsLoaderTests(unittest.TestCase):
         search = next(tool for tool in tools if tool.name == "search_knowledge")
         result = search.invoke({"query": "什么是 langchain"})
         self.assertIn("LangChain", result)
+
+    def test_learning_record_tool_schema_explains_enum_values(self):
+        record_tool = next(
+            tool for tool in tools if tool.name == "record_chinese_literacy_weakness"
+        )
+
+        schema_text = json.dumps(
+            record_tool.args_schema.model_json_schema(), ensure_ascii=False
+        )
+
+        self.assertIn("pinyin", schema_text)
+        self.assertIn("拼音", schema_text)
+        self.assertIn("medium", schema_text)
+        self.assertIn("中等", schema_text)
 
 
 if __name__ == "__main__":

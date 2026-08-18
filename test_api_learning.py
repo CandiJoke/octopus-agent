@@ -64,6 +64,22 @@ class LearningApiTests(unittest.TestCase):
         listed = list_response.json()
         self.assertEqual([item["weaknessId"] for item in listed], [created["weaknessId"]])
 
+    def test_create_weakness_accepts_chinese_enum_aliases(self):
+        response = self.client.post(
+            "/users/user-a/children/default/weaknesses",
+            json={
+                "category": "拼音",
+                "title": "声母容易混",
+                "evidence": "拼读声母时反复混淆。",
+                "severity": "中等",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["category"], "pinyin")
+        self.assertEqual(payload["severity"], "medium")
+
     def test_weaknesses_are_isolated_by_user(self):
         self.client.post(
             "/users/user-a/children/default/weaknesses",

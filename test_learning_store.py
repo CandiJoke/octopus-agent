@@ -1,14 +1,18 @@
 import tempfile
 import unittest
 from pathlib import Path
+import sqlite3
+from unittest.mock import patch
 
 from learning_store import (
     DEFAULT_CHILD_ID,
     DEFAULT_GRADE,
     DEFAULT_SUBJECT,
     LearningStore,
+    normalize_title,
     serialize_child_profile,
     serialize_learning_weakness,
+    utc_now,
 )
 
 
@@ -89,6 +93,124 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(second.evidence, "第二次反馈，拼读仍然慢。")
         self.assertEqual(second.severity, "high")
         self.assertEqual(len(self.store.list_weaknesses("user-a")), 1)
+
+    def test_chinese_enum_aliases_are_normalized(self):
+        record, created = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            category="拼音",
+            title="声母容易混",
+            evidence="拼读声母时反复混淆。",
+            severity="中等",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(record.category, "pinyin")
+        self.assertEqual(record.severity, "medium")
+
+    def test_sensitive_learning_text_is_redacted_before_storage(self):
+        record, _ = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            category="pinyin",
+            title="孩子名字是王小明，阳光小学拼音混淆",
+            evidence=(
+                "孩子叫王小明，妈妈叫李红，住在上海市浦东新区，"
+                "医生说ADHD，电话13812345678。"
+            ),
+            severity="medium",
+        )
+
+        combined = f"{record.title}\n{record.evidence}"
+        for sensitive_text in [
+            "王小明",
+            "阳光小学",
+            "李红",
+            "浦东新区",
+            "ADHD",
+            "13812345678",
+        ]:
+            self.assertNotIn(sensitive_text, combined)
+        self.assertIn("已隐藏", combined)
+
+    def test_integrity_race_updates_existing_active_record(self):
+        real_connect = self.store._connect
+        inserted_race_record = False
+
+        def insert_race_record_once():
+            nonlocal inserted_race_record
+            if inserted_race_record:
+                return
+            inserted_race_record = True
+            now = utc_now()
+            with sqlite3.connect(str(self.db_path)) as conn:
+                conn.execute("PRAGMA foreign_keys=ON")
+                conn.execute(
+                    """
+                    INSERT INTO learning_weaknesses(
+                        weakness_id, user_id, child_id, subject, grade, category,
+                        title, normalized_title, evidence, severity, status,
+                        source_run_id, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        "weakness_race",
+                        "user-a",
+                        DEFAULT_CHILD_ID,
+                        DEFAULT_SUBJECT,
+                        DEFAULT_GRADE,
+                        "pinyin",
+                        "b/p/d/q 混淆",
+                        normalize_title("b/p/d/q 混淆"),
+                        "并发请求先写入。",
+                        "mild",
+                        "active",
+                        None,
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+
+        class RaceConnection:
+            def __init__(self, conn):
+                self.conn = conn
+
+            def __enter__(self):
+                self.conn.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return self.conn.__exit__(exc_type, exc, tb)
+
+            def execute(self, sql, params=()):
+                if "INSERT INTO learning_weaknesses" in sql:
+                    insert_race_record_once()
+                return self.conn.execute(sql, params)
+
+            def __getattr__(self, name):
+                return getattr(self.conn, name)
+
+        def connect_with_race():
+            return RaceConnection(real_connect())
+
+        with patch.object(self.store, "_connect", connect_with_race):
+            record, created = self.store.upsert_weakness(
+                "user-a",
+                DEFAULT_CHILD_ID,
+                category="pinyin",
+                title="b/p/d/q 混淆",
+                evidence="父母这次补充说拼读仍然慢。",
+                severity="high",
+                source_run_id="run-b",
+            )
+
+        self.assertFalse(created)
+        self.assertEqual(record.weakness_id, "weakness_race")
+        self.assertEqual(record.evidence, "父母这次补充说拼读仍然慢。")
+        self.assertEqual(record.severity, "high")
+        self.assertEqual(record.source_run_id, "run-b")
 
     def test_weaknesses_are_isolated_by_user(self):
         self.store.upsert_weakness(

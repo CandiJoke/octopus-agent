@@ -40,8 +40,10 @@ from learning_context import current_learning_context, learning_run_context
 from learning_store import (
     DEFAULT_CHILD_ID,
     LearningStore,
-    VALID_CATEGORIES,
-    VALID_SEVERITIES,
+    WeaknessCategoryInput,
+    WeaknessSeverityInput,
+    normalize_category_value,
+    normalize_severity_value,
     serialize_child_profile,
     serialize_learning_weakness,
 )
@@ -88,10 +90,10 @@ class ChatResponse(BaseModel):
 class LearningWeaknessRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    category: str
+    category: WeaknessCategoryInput
     title: str
     evidence: str
-    severity: str
+    severity: WeaknessSeverityInput
     source_run_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("sourceRunId", "source_run_id"),
@@ -607,19 +609,16 @@ def record_default_child_weakness(
     req: LearningWeaknessRequest,
     store: LearningStore = Depends(get_learning_store),
 ):
-    if req.category not in VALID_CATEGORIES:
-        raise HTTPException(status_code=422, detail="Unsupported weakness category")
-    if req.severity not in VALID_SEVERITIES:
-        raise HTTPException(status_code=422, detail="Unsupported weakness severity")
-
     try:
+        category = normalize_category_value(req.category)
+        severity = normalize_severity_value(req.severity)
         record, _ = store.upsert_weakness(
             user_id,
             DEFAULT_CHILD_ID,
-            category=req.category,
+            category=category,
             title=req.title,
             evidence=req.evidence,
-            severity=req.severity,
+            severity=severity,
             source_run_id=req.source_run_id,
         )
     except ValueError as exc:

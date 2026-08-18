@@ -3,10 +3,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from langchain_core.tools import StructuredTool
+from pydantic import BaseModel
 
 from tools.calculator.calculator import run as calculator_run
 from tools.loader import load_tool_meta
 from tools.record_chinese_literacy_weakness.record_chinese_literacy_weakness import (
+    RecordChineseLiteracyWeaknessInput,
     run as record_chinese_literacy_weakness_run,
 )
 from tools.search_knowledge.search_knowledge import run as search_knowledge_run
@@ -19,6 +21,7 @@ class ToolSpec:
     directory: str
     run_fn: Callable[..., str]
     category: str
+    args_schema: type[BaseModel] | None = None
 
 
 TOOL_SPECS = (
@@ -28,6 +31,7 @@ TOOL_SPECS = (
         "record_chinese_literacy_weakness",
         record_chinese_literacy_weakness_run,
         "学习记录",
+        RecordChineseLiteracyWeaknessInput,
     ),
 )
 
@@ -38,6 +42,7 @@ def _make_tool(spec: ToolSpec) -> StructuredTool:
         func=spec.run_fn,
         name=meta["name"],
         description=meta["description"],
+        args_schema=spec.args_schema,
     )
 
 

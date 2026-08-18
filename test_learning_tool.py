@@ -38,6 +38,27 @@ class LearningToolTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].source_run_id, "run-a")
 
+    def test_tool_accepts_chinese_enum_aliases(self):
+        with (
+            patch(
+                "tools.record_chinese_literacy_weakness."
+                "record_chinese_literacy_weakness.learning_store",
+                self.store,
+            ),
+            learning_run_context("user-a", "default", "run-a"),
+        ):
+            result = run(
+                category="拼音",
+                title="声母容易混",
+                evidence="拼读声母时反复混淆。",
+                severity="中等",
+            )
+
+        self.assertIn("已记录薄弱点", result)
+        records = self.store.list_weaknesses("user-a")
+        self.assertEqual(records[0].category, "pinyin")
+        self.assertEqual(records[0].severity, "medium")
+
     def test_tool_refuses_to_record_without_context(self):
         with patch(
             "tools.record_chinese_literacy_weakness."
