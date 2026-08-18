@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from learning_context import current_learning_context
-from learning_store import LearningStore, WeaknessCategoryInput, WeaknessSeverityInput
+from learning_store import (
+    ChineseWeaknessCategoryInput,
+    LearningStore,
+    WeaknessSeverityInput,
+)
 from pydantic import BaseModel, Field
 
 
@@ -13,7 +17,7 @@ learning_store.initialize()
 
 
 class RecordChineseLiteracyWeaknessInput(BaseModel):
-    category: WeaknessCategoryInput = Field(
+    category: ChineseWeaknessCategoryInput = Field(
         description=(
             "薄弱点分类。可用值：pinyin/拼音，character_recognition/识字，"
             "reading/朗读，expression/表达，learning_habit/学习习惯。"
@@ -27,7 +31,7 @@ class RecordChineseLiteracyWeaknessInput(BaseModel):
 
 
 def run(
-    category: WeaknessCategoryInput,
+    category: ChineseWeaknessCategoryInput,
     title: str,
     evidence: str,
     severity: WeaknessSeverityInput,

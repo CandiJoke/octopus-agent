@@ -33,6 +33,23 @@ WeaknessCategory = Literal[
 ]
 WeaknessSeverity = Literal["mild", "medium", "high"]
 WeaknessStatus = Literal["active", "improving", "resolved"]
+ChineseWeaknessCategoryInput = Literal[
+    "pinyin",
+    "character_recognition",
+    "reading",
+    "expression",
+    "learning_habit",
+    "拼音",
+    "拼读",
+    "识字",
+    "认字",
+    "朗读",
+    "阅读",
+    "表达",
+    "口语表达",
+    "学习习惯",
+    "习惯",
+]
 WeaknessCategoryInput = Literal[
     "pinyin",
     "character_recognition",
@@ -386,13 +403,14 @@ class LearningStore:
         if row is None or "phonics" in str(row["sql"]):
             return
 
-        conn.executescript(
-            """
-            ALTER TABLE learning_weaknesses RENAME TO learning_weaknesses_old;
-            DROP INDEX IF EXISTS idx_learning_weakness_active_unique;
-            DROP INDEX IF EXISTS idx_learning_weaknesses_user_child_status;
-
-            CREATE TABLE learning_weaknesses (
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("ALTER TABLE learning_weaknesses RENAME TO learning_weaknesses_old")
+            conn.execute("DROP INDEX IF EXISTS idx_learning_weakness_active_unique")
+            conn.execute("DROP INDEX IF EXISTS idx_learning_weaknesses_user_child_status")
+            conn.execute(
+                """
+                CREATE TABLE learning_weaknesses (
                 weakness_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
                 child_id TEXT NOT NULL,
@@ -425,31 +443,44 @@ class LearningStore:
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id, child_id)
                     REFERENCES child_profiles(user_id, child_id)
-            );
-
-            INSERT INTO learning_weaknesses(
-                weakness_id, user_id, child_id, subject, grade, category,
-                title, normalized_title, evidence, severity, status,
-                source_run_id, created_at, updated_at
+                )
+                """
             )
-            SELECT
+            conn.execute(
+                """
+                INSERT INTO learning_weaknesses(
                 weakness_id, user_id, child_id, subject, grade, category,
                 title, normalized_title, evidence, severity, status,
                 source_run_id, created_at, updated_at
-            FROM learning_weaknesses_old;
-
-            DROP TABLE learning_weaknesses_old;
-
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_weakness_active_unique
+                )
+                SELECT
+                weakness_id, user_id, child_id, subject, grade, category,
+                title, normalized_title, evidence, severity, status,
+                source_run_id, created_at, updated_at
+                FROM learning_weaknesses_old
+                """
+            )
+            conn.execute("DROP TABLE learning_weaknesses_old")
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_weakness_active_unique
                 ON learning_weaknesses(
                     user_id, child_id, subject, category, normalized_title
                 )
-                WHERE status = 'active';
-
-            CREATE INDEX IF NOT EXISTS idx_learning_weaknesses_user_child_status
-                ON learning_weaknesses(user_id, child_id, status, updated_at DESC);
-            """
-        )
+                WHERE status = 'active'
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_learning_weaknesses_user_child_status
+                ON learning_weaknesses(user_id, child_id, status, updated_at DESC)
+                """
+            )
+        except Exception:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
 
     def get_or_create_default_profile(self, user_id: str) -> ChildProfileRecord:
         with self._connect() as conn:

@@ -191,6 +191,7 @@ class LearningStoreTests(unittest.TestCase):
 
     def test_old_chinese_only_schema_is_migrated_for_new_subjects(self):
         old_db_path = Path(self.temp_dir.name) / "old-learning.db"
+        old_created_at = "2026-08-18T00:00:00+00:00"
         with sqlite3.connect(str(old_db_path)) as conn:
             conn.executescript(
                 """
@@ -232,6 +233,48 @@ class LearningStoreTests(unittest.TestCase):
                 );
                 """
             )
+            conn.execute(
+                """
+                INSERT INTO child_profiles(
+                    user_id, child_id, display_name, grade, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "user-a",
+                    DEFAULT_CHILD_ID,
+                    "孩子",
+                    DEFAULT_GRADE,
+                    old_created_at,
+                    old_created_at,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO learning_weaknesses(
+                    weakness_id, user_id, child_id, subject, grade, category,
+                    title, normalized_title, evidence, severity, status,
+                    source_run_id, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "weakness_old",
+                    "user-a",
+                    DEFAULT_CHILD_ID,
+                    DEFAULT_SUBJECT,
+                    DEFAULT_GRADE,
+                    "pinyin",
+                    "旧拼音记录",
+                    normalize_title("旧拼音记录"),
+                    "旧表里的拼音记录。",
+                    "mild",
+                    "active",
+                    "run-old",
+                    old_created_at,
+                    old_created_at,
+                ),
+            )
             conn.commit()
 
         migrated_store = LearningStore(old_db_path)
@@ -250,6 +293,11 @@ class LearningStoreTests(unittest.TestCase):
         self.assertTrue(created)
         self.assertEqual(record.subject, "english")
         self.assertEqual(record.category, "phonics")
+        records = migrated_store.list_weaknesses("user-a")
+        self.assertEqual(
+            {item.weakness_id for item in records},
+            {"weakness_old", record.weakness_id},
+        )
 
     def test_sensitive_learning_text_is_redacted_before_storage(self):
         record, _ = self.store.upsert_weakness(

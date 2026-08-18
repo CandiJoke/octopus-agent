@@ -46,6 +46,8 @@ class ToolsLoaderTests(unittest.TestCase):
         self.assertIn("拼音", schema_text)
         self.assertIn("medium", schema_text)
         self.assertIn("中等", schema_text)
+        self.assertNotIn("calculation", schema_text)
+        self.assertNotIn("计算", schema_text)
 
     def test_general_learning_tool_schema_explains_subject_and_category_values(self):
         record_tool = next(tool for tool in tools if tool.name == "record_learning_weakness")
