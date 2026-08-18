@@ -39,11 +39,14 @@ from history_store import (
 from learning_context import current_learning_context, learning_run_context
 from learning_store import (
     DEFAULT_CHILD_ID,
+    DEFAULT_SUBJECT,
     LearningStore,
+    LearningSubjectInput,
     WeaknessCategoryInput,
     WeaknessSeverityInput,
     normalize_category_value,
     normalize_severity_value,
+    normalize_subject_value,
     serialize_child_profile,
     serialize_learning_weakness,
 )
@@ -594,27 +597,35 @@ def get_default_child_profile(
 def list_default_child_weaknesses(
     user_id: str,
     status: str | None = None,
+    subject: str | None = None,
     store: LearningStore = Depends(get_learning_store),
 ):
     try:
-        records = store.list_weaknesses(user_id, DEFAULT_CHILD_ID, status=status)
+        records = store.list_weaknesses(
+            user_id,
+            DEFAULT_CHILD_ID,
+            status=status,
+            subject=subject,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return [serialize_learning_weakness(record) for record in records]
 
 
-@app.post("/users/{user_id}/children/default/weaknesses")
-def record_default_child_weakness(
+def record_child_weakness_for_subject(
     user_id: str,
+    subject: str,
     req: LearningWeaknessRequest,
-    store: LearningStore = Depends(get_learning_store),
+    store: LearningStore,
 ):
     try:
-        category = normalize_category_value(req.category)
+        normalized_subject = normalize_subject_value(subject)
+        category = normalize_category_value(normalized_subject, req.category)
         severity = normalize_severity_value(req.severity)
         record, _ = store.upsert_weakness(
             user_id,
             DEFAULT_CHILD_ID,
+            subject=normalized_subject,
             category=category,
             title=req.title,
             evidence=req.evidence,
@@ -624,6 +635,25 @@ def record_default_child_weakness(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_learning_weakness(record)
+
+
+@app.post("/users/{user_id}/children/default/weaknesses")
+def record_default_child_weakness(
+    user_id: str,
+    req: LearningWeaknessRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    return record_child_weakness_for_subject(user_id, DEFAULT_SUBJECT, req, store)
+
+
+@app.post("/users/{user_id}/children/default/subjects/{subject}/weaknesses")
+def record_default_child_subject_weakness(
+    user_id: str,
+    subject: LearningSubjectInput,
+    req: LearningWeaknessRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    return record_child_weakness_for_subject(user_id, subject, req, store)
 
 
 @app.post("/users/{user_id}/sessions")
