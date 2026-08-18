@@ -20,6 +20,7 @@ class ToolsLoaderTests(unittest.TestCase):
                 "calculator",
                 "search_knowledge",
                 "record_chinese_literacy_weakness",
+                "record_learning_weakness",
             },
         )
 
@@ -45,6 +46,18 @@ class ToolsLoaderTests(unittest.TestCase):
         self.assertIn("拼音", schema_text)
         self.assertIn("medium", schema_text)
         self.assertIn("中等", schema_text)
+
+    def test_general_learning_tool_schema_explains_subject_and_category_values(self):
+        record_tool = next(tool for tool in tools if tool.name == "record_learning_weakness")
+
+        schema_text = json.dumps(
+            record_tool.args_schema.model_json_schema(), ensure_ascii=False
+        )
+
+        self.assertIn("english", schema_text)
+        self.assertIn("英语", schema_text)
+        self.assertIn("calculation", schema_text)
+        self.assertIn("计算", schema_text)
 
 
 if __name__ == "__main__":

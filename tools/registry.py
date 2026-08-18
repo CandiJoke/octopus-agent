@@ -11,6 +11,10 @@ from tools.record_chinese_literacy_weakness.record_chinese_literacy_weakness imp
     RecordChineseLiteracyWeaknessInput,
     run as record_chinese_literacy_weakness_run,
 )
+from tools.record_learning_weakness.record_learning_weakness import (
+    RecordLearningWeaknessInput,
+    run as record_learning_weakness_run,
+)
 from tools.search_knowledge.search_knowledge import run as search_knowledge_run
 
 TOOLS_DIR = Path(__file__).parent
@@ -32,6 +36,12 @@ TOOL_SPECS = (
         record_chinese_literacy_weakness_run,
         "学习记录",
         RecordChineseLiteracyWeaknessInput,
+    ),
+    ToolSpec(
+        "record_learning_weakness",
+        record_learning_weakness_run,
+        "学习记录",
+        RecordLearningWeaknessInput,
     ),
 )
 

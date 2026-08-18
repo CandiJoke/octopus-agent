@@ -5,7 +5,10 @@ from unittest.mock import patch
 
 from learning_context import learning_run_context
 from learning_store import LearningStore
-from tools.record_chinese_literacy_weakness.record_chinese_literacy_weakness import run
+from tools.record_chinese_literacy_weakness.record_chinese_literacy_weakness import (
+    run as run_chinese,
+)
+from tools.record_learning_weakness.record_learning_weakness import run as run_general
 
 
 class LearningToolTests(unittest.TestCase):
@@ -26,7 +29,7 @@ class LearningToolTests(unittest.TestCase):
             ),
             learning_run_context("user-a", "default", "run-a"),
         ):
-            result = run(
+            result = run_chinese(
                 category="pinyin",
                 title="b/p/d/q 混淆",
                 evidence="孩子拼音拼读时经常混淆。",
@@ -47,7 +50,7 @@ class LearningToolTests(unittest.TestCase):
             ),
             learning_run_context("user-a", "default", "run-a"),
         ):
-            result = run(
+            result = run_chinese(
                 category="拼音",
                 title="声母容易混",
                 evidence="拼读声母时反复混淆。",
@@ -59,13 +62,35 @@ class LearningToolTests(unittest.TestCase):
         self.assertEqual(records[0].category, "pinyin")
         self.assertEqual(records[0].severity, "medium")
 
+    def test_general_tool_records_math_weakness_from_context(self):
+        with (
+            patch(
+                "tools.record_learning_weakness.record_learning_weakness.learning_store",
+                self.store,
+            ),
+            learning_run_context("user-a", "default", "run-math"),
+        ):
+            result = run_general(
+                subject="数学",
+                category="计算",
+                title="口算慢",
+                evidence="10 以内口算会停很久。",
+                severity="中等",
+            )
+
+        self.assertIn("已记录薄弱点", result)
+        records = self.store.list_weaknesses("user-a", subject="math")
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].source_run_id, "run-math")
+        self.assertEqual(records[0].category, "calculation")
+
     def test_tool_refuses_to_record_without_context(self):
         with patch(
             "tools.record_chinese_literacy_weakness."
             "record_chinese_literacy_weakness.learning_store",
             self.store,
         ):
-            result = run(
+            result = run_chinese(
                 category="pinyin",
                 title="b/p/d/q 混淆",
                 evidence="孩子拼音拼读时经常混淆。",

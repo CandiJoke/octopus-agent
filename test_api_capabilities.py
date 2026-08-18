@@ -28,9 +28,11 @@ class CapabilityApiTests(unittest.TestCase):
                 "tool.calculator",
                 "tool.search_knowledge",
                 "tool.record_chinese_literacy_weakness",
+                "tool.record_learning_weakness",
                 "skill.math_problem_solver",
                 "skill.knowledge_lookup",
                 "skill.chinese_literacy_support",
+                "skill.first_grade_learning_support",
             ],
         )
 
@@ -49,7 +51,12 @@ class CapabilityApiTests(unittest.TestCase):
         self.assertEqual(record_tool["name"], "record_chinese_literacy_weakness")
         self.assertEqual(record_tool["category"], "学习记录")
 
-        math_skill = capabilities[3]
+        general_record_tool = capabilities[3]
+        self.assertEqual(general_record_tool["type"], "tool")
+        self.assertEqual(general_record_tool["name"], "record_learning_weakness")
+        self.assertEqual(general_record_tool["category"], "学习记录")
+
+        math_skill = capabilities[4]
         self.assertEqual(math_skill["type"], "skill")
         self.assertEqual(math_skill["name"], "math_problem_solver")
         self.assertEqual(math_skill["displayName"], "Math Problem Solver")
@@ -59,13 +66,18 @@ class CapabilityApiTests(unittest.TestCase):
         self.assertTrue(math_skill["enabled"])
         self.assertEqual(math_skill["tools"], ["calculator"])
 
-        chinese_skill = capabilities[5]
+        chinese_skill = capabilities[6]
         self.assertEqual(chinese_skill["type"], "skill")
         self.assertEqual(chinese_skill["name"], "chinese_literacy_support")
         self.assertEqual(
             chinese_skill["tools"],
             ["record_chinese_literacy_weakness"],
         )
+
+        first_grade_skill = capabilities[7]
+        self.assertEqual(first_grade_skill["type"], "skill")
+        self.assertEqual(first_grade_skill["name"], "first_grade_learning_support")
+        self.assertEqual(first_grade_skill["tools"], ["record_learning_weakness"])
 
     def test_skills_endpoint_lists_skill_details(self):
         response = self.client.get("/skills")
@@ -81,6 +93,7 @@ class CapabilityApiTests(unittest.TestCase):
                 "math_problem_solver",
                 "knowledge_lookup",
                 "chinese_literacy_support",
+                "first_grade_learning_support",
             ],
         )
 

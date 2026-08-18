@@ -36,6 +36,7 @@ SKILL_SPECS = (
     SkillSpec("math_problem_solver"),
     SkillSpec("knowledge_lookup"),
     SkillSpec("chinese_literacy_support"),
+    SkillSpec("first_grade_learning_support"),
 )
 
 
