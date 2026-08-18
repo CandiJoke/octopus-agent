@@ -36,6 +36,14 @@ from history_store import (
     HistoryStore,
     new_id,
 )
+from learning_store import (
+    DEFAULT_CHILD_ID,
+    LearningStore,
+    VALID_CATEGORIES,
+    VALID_SEVERITIES,
+    serialize_child_profile,
+    serialize_learning_weakness,
+)
 from tools import tools
 from skills import build_skill_catalog, get_skill, serialize_skill_detail
 
@@ -76,6 +84,19 @@ class ChatResponse(BaseModel):
     steps: list[dict]  # Agent 思考过程
 
 
+class LearningWeaknessRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    category: str
+    title: str
+    evidence: str
+    severity: str
+    source_run_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("sourceRunId", "source_run_id"),
+    )
+
+
 # ========== 创建 Agent（带 Checkpointer 实现多轮记忆）==========
 
 llm = ChatOpenAI(
@@ -92,6 +113,8 @@ agent = create_langchain_agent(
 )
 history_store = HistoryStore(DB_PATH)
 history_store.initialize()
+learning_store = LearningStore(DB_PATH)
+learning_store.initialize()
 
 STREAM_INPUT_LIMIT = 200
 STREAM_OUTPUT_LIMIT = 500
@@ -102,6 +125,10 @@ STREAM_STOPPED_ANSWER = "已停止输出。"
 
 def get_history_store() -> HistoryStore:
     return history_store
+
+
+def get_learning_store() -> LearningStore:
+    return learning_store
 
 
 def agent_thread_id(user_id: str, session_id: str) -> str:
@@ -544,6 +571,53 @@ def get_skill_detail(skill_id: str):
     if skill is None:
         raise HTTPException(status_code=404, detail="Skill not found")
     return serialize_skill_detail(skill)
+
+
+@app.get("/users/{user_id}/children/default/profile")
+def get_default_child_profile(
+    user_id: str,
+    store: LearningStore = Depends(get_learning_store),
+):
+    return serialize_child_profile(store.get_or_create_default_profile(user_id))
+
+
+@app.get("/users/{user_id}/children/default/weaknesses")
+def list_default_child_weaknesses(
+    user_id: str,
+    status: str | None = None,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        records = store.list_weaknesses(user_id, DEFAULT_CHILD_ID, status=status)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return [serialize_learning_weakness(record) for record in records]
+
+
+@app.post("/users/{user_id}/children/default/weaknesses")
+def record_default_child_weakness(
+    user_id: str,
+    req: LearningWeaknessRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    if req.category not in VALID_CATEGORIES:
+        raise HTTPException(status_code=422, detail="Unsupported weakness category")
+    if req.severity not in VALID_SEVERITIES:
+        raise HTTPException(status_code=422, detail="Unsupported weakness severity")
+
+    try:
+        record, _ = store.upsert_weakness(
+            user_id,
+            DEFAULT_CHILD_ID,
+            category=req.category,
+            title=req.title,
+            evidence=req.evidence,
+            severity=req.severity,
+            source_run_id=req.source_run_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_learning_weakness(record)
 
 
 @app.post("/users/{user_id}/sessions")
