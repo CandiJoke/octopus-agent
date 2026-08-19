@@ -16,6 +16,10 @@ from tools.record_learning_weakness.record_learning_weakness import (
     run as record_learning_weakness_run,
 )
 from tools.search_knowledge.search_knowledge import run as search_knowledge_run
+from tools.update_child_profile.update_child_profile import (
+    UpdateChildProfileInput,
+    run as update_child_profile_run,
+)
 
 TOOLS_DIR = Path(__file__).parent
 
@@ -31,6 +35,12 @@ class ToolSpec:
 TOOL_SPECS = (
     ToolSpec("calculator", calculator_run, "基础工具"),
     ToolSpec("search_knowledge", search_knowledge_run, "知识检索"),
+    ToolSpec(
+        "update_child_profile",
+        update_child_profile_run,
+        "学习画像",
+        UpdateChildProfileInput,
+    ),
     ToolSpec(
         "record_chinese_literacy_weakness",
         record_chinese_literacy_weakness_run,

@@ -19,6 +19,7 @@ class ToolsLoaderTests(unittest.TestCase):
             {
                 "calculator",
                 "search_knowledge",
+                "update_child_profile",
                 "record_chinese_literacy_weakness",
                 "record_learning_weakness",
             },
@@ -60,6 +61,16 @@ class ToolsLoaderTests(unittest.TestCase):
         self.assertIn("英语", schema_text)
         self.assertIn("calculation", schema_text)
         self.assertIn("计算", schema_text)
+
+    def test_update_child_profile_tool_schema_explains_primary_grades(self):
+        update_tool = next(tool for tool in tools if tool.name == "update_child_profile")
+
+        schema_text = json.dumps(
+            update_tool.args_schema.model_json_schema(), ensure_ascii=False
+        )
+
+        self.assertIn("grade_2", schema_text)
+        self.assertIn("二年级", schema_text)
 
     def test_learning_tool_metadata_uses_primary_stage_language(self):
         meta = load_tool_meta(

@@ -7,12 +7,14 @@ category: 学习支持
 status: available
 source: local
 enabled: true
-tools: record_learning_weakness
+tools: update_child_profile, record_learning_weakness
 ---
 
 # Primary Learning Support
 
 - 当用户描述小学阶段孩子在语文、英语或数学上的具体问题时，先识别 subject 和 category。
+- 当用户明确说明孩子当前年级或年级发生变化时，调用 `update_child_profile` 更新画像；例如二年级使用 `grade_2`。
+- 年级仅支持小学一年级到六年级：`grade_1`、`grade_2`、`grade_3`、`grade_4`、`grade_5`、`grade_6`。
 - 根据当前 child profile 的 grade 记录，不要向工具传 userId、childId、grade 或数据库 ID。
 - 如果描述足够具体，调用 `record_learning_weakness` 保存记录。
 - 调用工具前隐藏真实姓名、学校、住址、电话、诊断标签和家庭成员身份信息，只保留学习现象。

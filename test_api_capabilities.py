@@ -27,6 +27,7 @@ class CapabilityApiTests(unittest.TestCase):
             [
                 "tool.calculator",
                 "tool.search_knowledge",
+                "tool.update_child_profile",
                 "tool.record_chinese_literacy_weakness",
                 "tool.record_learning_weakness",
                 "skill.math_problem_solver",
@@ -46,17 +47,22 @@ class CapabilityApiTests(unittest.TestCase):
         self.assertTrue(calculator["enabled"])
         self.assertIn("数学计算", calculator["description"])
 
-        record_tool = capabilities[2]
+        update_profile_tool = capabilities[2]
+        self.assertEqual(update_profile_tool["type"], "tool")
+        self.assertEqual(update_profile_tool["name"], "update_child_profile")
+        self.assertEqual(update_profile_tool["category"], "学习画像")
+
+        record_tool = capabilities[3]
         self.assertEqual(record_tool["type"], "tool")
         self.assertEqual(record_tool["name"], "record_chinese_literacy_weakness")
         self.assertEqual(record_tool["category"], "学习记录")
 
-        general_record_tool = capabilities[3]
+        general_record_tool = capabilities[4]
         self.assertEqual(general_record_tool["type"], "tool")
         self.assertEqual(general_record_tool["name"], "record_learning_weakness")
         self.assertEqual(general_record_tool["category"], "学习记录")
 
-        math_skill = capabilities[4]
+        math_skill = capabilities[5]
         self.assertEqual(math_skill["type"], "skill")
         self.assertEqual(math_skill["name"], "math_problem_solver")
         self.assertEqual(math_skill["displayName"], "Math Problem Solver")
@@ -66,7 +72,7 @@ class CapabilityApiTests(unittest.TestCase):
         self.assertTrue(math_skill["enabled"])
         self.assertEqual(math_skill["tools"], ["calculator"])
 
-        chinese_skill = capabilities[6]
+        chinese_skill = capabilities[7]
         self.assertEqual(chinese_skill["type"], "skill")
         self.assertEqual(chinese_skill["name"], "chinese_literacy_support")
         self.assertEqual(
@@ -74,10 +80,13 @@ class CapabilityApiTests(unittest.TestCase):
             ["record_chinese_literacy_weakness"],
         )
 
-        primary_skill = capabilities[7]
+        primary_skill = capabilities[8]
         self.assertEqual(primary_skill["type"], "skill")
         self.assertEqual(primary_skill["name"], "primary_learning_support")
-        self.assertEqual(primary_skill["tools"], ["record_learning_weakness"])
+        self.assertEqual(
+            primary_skill["tools"],
+            ["update_child_profile", "record_learning_weakness"],
+        )
 
     def test_skills_endpoint_lists_skill_details(self):
         response = self.client.get("/skills")

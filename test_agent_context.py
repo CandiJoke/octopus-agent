@@ -13,6 +13,9 @@ class AgentContextTests(unittest.TestCase):
         self.assertIn("calculator", prompt)
         self.assertIn("Knowledge Lookup", prompt)
         self.assertIn("search_knowledge", prompt)
+        self.assertIn("Primary Learning Support", prompt)
+        self.assertIn("update_child_profile", prompt)
+        self.assertIn("二年级", prompt)
         self.assertNotIn("# Math Problem Solver", prompt)
 
     def test_system_prompt_respects_explicit_empty_skill_list(self):

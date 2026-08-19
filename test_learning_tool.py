@@ -9,6 +9,7 @@ from tools.record_chinese_literacy_weakness.record_chinese_literacy_weakness imp
     run as run_chinese,
 )
 from tools.record_learning_weakness.record_learning_weakness import run as run_general
+from tools.update_child_profile.update_child_profile import run as run_update_profile
 
 
 class LearningToolTests(unittest.TestCase):
@@ -84,6 +85,20 @@ class LearningToolTests(unittest.TestCase):
         self.assertEqual(records[0].source_run_id, "run-math")
         self.assertEqual(records[0].category, "calculation")
 
+    def test_update_profile_tool_updates_grade_from_injected_context(self):
+        with (
+            patch(
+                "tools.update_child_profile.update_child_profile.learning_store",
+                self.store,
+            ),
+            learning_run_context("user-a", "default", "run-grade"),
+        ):
+            result = run_update_profile(grade="二年级")
+
+        self.assertIn("已更新学习画像", result)
+        profile = self.store.get_or_create_default_profile("user-a")
+        self.assertEqual(profile.grade, "grade_2")
+
     def test_tool_refuses_to_record_without_context(self):
         with patch(
             "tools.record_chinese_literacy_weakness."
@@ -99,6 +114,17 @@ class LearningToolTests(unittest.TestCase):
 
         self.assertIn("暂时无法记录", result)
         self.assertEqual(self.store.list_weaknesses("user-a"), [])
+
+    def test_update_profile_tool_refuses_without_context(self):
+        with patch(
+            "tools.update_child_profile.update_child_profile.learning_store",
+            self.store,
+        ):
+            result = run_update_profile(grade="二年级")
+
+        self.assertIn("暂时无法更新学习画像", result)
+        profile = self.store.get_or_create_default_profile("user-a")
+        self.assertEqual(profile.grade, "grade_1")
 
 
 if __name__ == "__main__":
