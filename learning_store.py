@@ -617,10 +617,10 @@ def normalize_plan_date(value: str | None) -> str | None:
         return None
     normalized = str(value).strip()
     try:
-        datetime.strptime(normalized, "%Y-%m-%d")
+        parsed = datetime.strptime(normalized, "%Y-%m-%d")
     except ValueError as exc:
         raise ValueError(f"invalid learning plan date: {value}") from exc
-    return normalized
+    return parsed.date().isoformat()
 
 
 def parse_plan_date(value: str) -> date:

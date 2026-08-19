@@ -893,6 +893,56 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(item["checkin"]["checkinDate"], "2026-08-20")
         self.assertIsNone(payload["days"][0]["plans"][0]["items"][0]["checkin"])
 
+    def test_learning_plan_dates_are_canonicalized_for_calendar_queries(self):
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="math",
+            category="calculation",
+            title="口算慢",
+            evidence="10 以内口算会停很久。",
+            severity="medium",
+        )
+        plan = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="日期归一化计划。",
+            start_date="2026-8-1",
+            end_date="2026-8-3",
+        )
+        self.store.update_learning_plan_status("user-a", plan.plan.plan_id, "active")
+        checked = self.store.upsert_learning_plan_checkin(
+            "user-a",
+            plan.plan.plan_id,
+            plan.items[0].item_id,
+            checkin_date="2026-8-2",
+            status="done",
+        )
+
+        checked_payload = serialize_learning_plan(checked)
+        summaries = self.store.list_learning_plan_summaries(
+            "user-a",
+            today="2026-08-02",
+        )
+        calendar = self.store.get_learning_calendar(
+            "user-a",
+            "2026-08-01",
+            "2026-08-03",
+            plan_id=plan.plan.plan_id,
+        )
+        calendar_payload = serialize_learning_calendar(calendar)
+
+        self.assertEqual(checked_payload["startDate"], "2026-08-01")
+        self.assertEqual(checked_payload["endDate"], "2026-08-03")
+        self.assertEqual(
+            checked_payload["items"][0]["checkins"][0]["checkinDate"],
+            "2026-08-02",
+        )
+        self.assertEqual(summaries[0].today_checkin_count, 1)
+        self.assertEqual(
+            calendar_payload["days"][1]["plans"][0]["items"][0]["checkin"]["status"],
+            "done",
+        )
+
     def test_learning_calendar_filters_plan_and_rejects_bad_ranges(self):
         self.store.upsert_weakness(
             "user-a",
