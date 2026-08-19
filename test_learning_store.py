@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 from learning_store import (
     DEFAULT_CHILD_ID,
-    DEFAULT_GRADE,
     DEFAULT_SUBJECT,
     LearningStore,
+    normalize_grade_value,
     normalize_title,
     serialize_child_profile,
     serialize_learning_weakness,
@@ -32,7 +32,7 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(profile.user_id, "user-a")
         self.assertEqual(profile.child_id, DEFAULT_CHILD_ID)
         self.assertEqual(profile.display_name, "孩子")
-        self.assertEqual(profile.grade, DEFAULT_GRADE)
+        self.assertEqual(profile.grade, "grade_1")
 
         same_profile = self.store.get_or_create_default_profile("user-a")
         self.assertEqual(same_profile.created_at, profile.created_at)
@@ -45,9 +45,53 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(payload["userId"], "user-a")
         self.assertEqual(payload["childId"], DEFAULT_CHILD_ID)
         self.assertEqual(payload["displayName"], "孩子")
-        self.assertEqual(payload["grade"], DEFAULT_GRADE)
+        self.assertEqual(payload["grade"], "grade_1")
         self.assertIn("createdAt", payload)
         self.assertIn("updatedAt", payload)
+
+    def test_primary_grade_aliases_are_normalized(self):
+        cases = {
+            "grade_1": "grade_1",
+            "first_grade": "grade_1",
+            "一年级": "grade_1",
+            "小学一年级": "grade_1",
+            "1": "grade_1",
+            "grade_3": "grade_3",
+            "third_grade": "grade_3",
+            "三年级": "grade_3",
+            "小学六年级": "grade_6",
+            "6": "grade_6",
+        }
+
+        for raw, expected in cases.items():
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_grade_value(raw), expected)
+
+        with self.assertRaises(ValueError):
+            normalize_grade_value("初一")
+
+    def test_default_profile_grade_can_be_updated_for_primary_stage(self):
+        profile = self.store.update_default_profile_grade("user-a", "三年级")
+
+        self.assertEqual(profile.grade, "grade_3")
+        same_profile = self.store.get_or_create_default_profile("user-a")
+        self.assertEqual(same_profile.grade, "grade_3")
+
+    def test_new_weakness_uses_current_child_profile_grade(self):
+        self.store.update_default_profile_grade("user-a", "四年级")
+
+        record, created = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="math",
+            category="calculation",
+            title="多位数计算慢",
+            evidence="四年级多位数计算步骤容易漏。",
+            severity="medium",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(record.grade, "grade_4")
 
     def test_upsert_weakness_creates_active_chinese_record(self):
         record, created = self.store.upsert_weakness(
@@ -62,7 +106,7 @@ class LearningStoreTests(unittest.TestCase):
 
         self.assertTrue(created)
         self.assertEqual(record.subject, DEFAULT_SUBJECT)
-        self.assertEqual(record.grade, DEFAULT_GRADE)
+        self.assertEqual(record.grade, "grade_1")
         self.assertEqual(record.status, "active")
         self.assertEqual(record.source_run_id, "run-a")
 
@@ -244,7 +288,7 @@ class LearningStoreTests(unittest.TestCase):
                     "user-a",
                     DEFAULT_CHILD_ID,
                     "孩子",
-                    DEFAULT_GRADE,
+                    "first_grade",
                     old_created_at,
                     old_created_at,
                 ),
@@ -263,7 +307,7 @@ class LearningStoreTests(unittest.TestCase):
                     "user-a",
                     DEFAULT_CHILD_ID,
                     DEFAULT_SUBJECT,
-                    DEFAULT_GRADE,
+                    "first_grade",
                     "pinyin",
                     "旧拼音记录",
                     normalize_title("旧拼音记录"),
@@ -279,6 +323,9 @@ class LearningStoreTests(unittest.TestCase):
 
         migrated_store = LearningStore(old_db_path)
         migrated_store.initialize()
+
+        migrated_profile = migrated_store.get_or_create_default_profile("user-a")
+        self.assertEqual(migrated_profile.grade, "grade_1")
 
         record, created = migrated_store.upsert_weakness(
             "user-a",
@@ -298,6 +345,8 @@ class LearningStoreTests(unittest.TestCase):
             {item.weakness_id for item in records},
             {"weakness_old", record.weakness_id},
         )
+        grades_by_id = {item.weakness_id: item.grade for item in records}
+        self.assertEqual(grades_by_id["weakness_old"], "grade_1")
 
     def test_sensitive_learning_text_is_redacted_before_storage(self):
         record, _ = self.store.upsert_weakness(
@@ -350,7 +399,7 @@ class LearningStoreTests(unittest.TestCase):
                         "user-a",
                         DEFAULT_CHILD_ID,
                         DEFAULT_SUBJECT,
-                        DEFAULT_GRADE,
+                        "grade_1",
                         "pinyin",
                         "b/p/d/q 混淆",
                         normalize_title("b/p/d/q 混淆"),
@@ -464,7 +513,7 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(payload["userId"], "user-a")
         self.assertEqual(payload["childId"], DEFAULT_CHILD_ID)
         self.assertEqual(payload["subject"], DEFAULT_SUBJECT)
-        self.assertEqual(payload["grade"], DEFAULT_GRADE)
+        self.assertEqual(payload["grade"], "grade_1")
         self.assertEqual(payload["sourceRunId"], "run-a")
 
 

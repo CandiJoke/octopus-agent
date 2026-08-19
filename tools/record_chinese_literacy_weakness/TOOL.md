@@ -1,6 +1,6 @@
 ---
 name: record_chinese_literacy_weakness
-description: 记录一年级语文学习薄弱点。仅当家长明确描述孩子在拼音、识字、朗读、表达或学习习惯上的具体问题时使用。输入分类、标题、依据和严重程度。
+description: 记录小学语文学习薄弱点。仅当家长明确描述孩子在拼音、识字、朗读、表达或学习习惯上的具体问题时使用。输入分类、标题、依据和严重程度。
 ---
 
 # Record Chinese Literacy Weakness

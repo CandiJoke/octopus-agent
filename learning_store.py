@@ -11,11 +11,44 @@ from typing import Literal
 
 DEFAULT_CHILD_ID = "default"
 DEFAULT_CHILD_DISPLAY_NAME = "孩子"
-DEFAULT_GRADE = "first_grade"
+DEFAULT_GRADE = "grade_1"
 DEFAULT_SUBJECT = "chinese"
 
 LearningSubject = Literal["chinese", "english", "math"]
 LearningSubjectInput = Literal["chinese", "english", "math", "语文", "英语", "数学"]
+LearningGrade = Literal["grade_1", "grade_2", "grade_3", "grade_4", "grade_5", "grade_6"]
+LearningGradeInput = Literal[
+    "grade_1",
+    "grade_2",
+    "grade_3",
+    "grade_4",
+    "grade_5",
+    "grade_6",
+    "first_grade",
+    "second_grade",
+    "third_grade",
+    "fourth_grade",
+    "fifth_grade",
+    "sixth_grade",
+    "一年级",
+    "二年级",
+    "三年级",
+    "四年级",
+    "五年级",
+    "六年级",
+    "小学一年级",
+    "小学二年级",
+    "小学三年级",
+    "小学四年级",
+    "小学五年级",
+    "小学六年级",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+]
 WeaknessCategory = Literal[
     "pinyin",
     "character_recognition",
@@ -104,8 +137,41 @@ WeaknessSeverityInput = Literal[
 ]
 
 VALID_SUBJECTS = {"chinese", "english", "math"}
+VALID_GRADES = {"grade_1", "grade_2", "grade_3", "grade_4", "grade_5", "grade_6"}
 VALID_SEVERITIES = {"mild", "medium", "high"}
 VALID_STATUSES = {"active", "improving", "resolved"}
+GRADE_ALIASES = {
+    "grade_1": "grade_1",
+    "first_grade": "grade_1",
+    "一年级": "grade_1",
+    "小学一年级": "grade_1",
+    "1": "grade_1",
+    "grade_2": "grade_2",
+    "second_grade": "grade_2",
+    "二年级": "grade_2",
+    "小学二年级": "grade_2",
+    "2": "grade_2",
+    "grade_3": "grade_3",
+    "third_grade": "grade_3",
+    "三年级": "grade_3",
+    "小学三年级": "grade_3",
+    "3": "grade_3",
+    "grade_4": "grade_4",
+    "fourth_grade": "grade_4",
+    "四年级": "grade_4",
+    "小学四年级": "grade_4",
+    "4": "grade_4",
+    "grade_5": "grade_5",
+    "fifth_grade": "grade_5",
+    "五年级": "grade_5",
+    "小学五年级": "grade_5",
+    "5": "grade_5",
+    "grade_6": "grade_6",
+    "sixth_grade": "grade_6",
+    "六年级": "grade_6",
+    "小学六年级": "grade_6",
+    "6": "grade_6",
+}
 SUBJECT_ALIASES = {
     "chinese": "chinese",
     "语文": "chinese",
@@ -273,6 +339,14 @@ def normalize_subject_value(subject: str) -> str:
     return normalized
 
 
+def normalize_grade_value(grade: str | int) -> str:
+    key = " ".join(str(grade).strip().split())
+    normalized = GRADE_ALIASES.get(key) or GRADE_ALIASES.get(key.lower())
+    if normalized is None:
+        raise ValueError(f"unsupported primary learning grade: {grade}")
+    return normalized
+
+
 def normalize_category_value(subject: str, category: str | None = None) -> str:
     if category is None:
         category = subject
@@ -303,6 +377,10 @@ def sanitize_learning_text(text: str) -> str:
 
 def validate_category(category: str) -> None:
     normalize_category_value(DEFAULT_SUBJECT, category)
+
+
+def validate_grade(grade: str | int) -> None:
+    normalize_grade_value(grade)
 
 
 def validate_severity(severity: str) -> None:
@@ -391,6 +469,7 @@ class LearningStore:
             """
         )
         self._migrate_learning_weaknesses_schema(conn)
+        self._migrate_learning_grades(conn)
 
     def _migrate_learning_weaknesses_schema(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
@@ -482,6 +561,24 @@ class LearningStore:
         else:
             conn.commit()
 
+    def _migrate_learning_grades(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            UPDATE child_profiles
+            SET grade = ?
+            WHERE grade = ?
+            """,
+            ("grade_1", "first_grade"),
+        )
+        conn.execute(
+            """
+            UPDATE learning_weaknesses
+            SET grade = ?
+            WHERE grade = ?
+            """,
+            ("grade_1", "first_grade"),
+        )
+
     def get_or_create_default_profile(self, user_id: str) -> ChildProfileRecord:
         with self._connect() as conn:
             row = conn.execute(
@@ -519,6 +616,34 @@ class LearningStore:
                     """,
                     (user_id, DEFAULT_CHILD_ID),
                 ).fetchone()
+            return child_profile_from_row(row)
+
+    def update_default_profile_grade(
+        self,
+        user_id: str,
+        grade: str | int,
+    ) -> ChildProfileRecord:
+        normalized_grade = normalize_grade_value(grade)
+        self.get_or_create_default_profile(user_id)
+        now = utc_now()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE child_profiles
+                SET grade = ?, updated_at = ?
+                WHERE user_id = ? AND child_id = ?
+                """,
+                (normalized_grade, now, user_id, DEFAULT_CHILD_ID),
+            )
+            conn.commit()
+            row = conn.execute(
+                """
+                SELECT user_id, child_id, display_name, grade, created_at, updated_at
+                FROM child_profiles
+                WHERE user_id = ? AND child_id = ?
+                """,
+                (user_id, DEFAULT_CHILD_ID),
+            ).fetchone()
             return child_profile_from_row(row)
 
     def list_weaknesses(
@@ -586,7 +711,7 @@ class LearningStore:
         if not safe_evidence:
             raise ValueError("weakness evidence is required")
 
-        self.get_or_create_default_profile(user_id)
+        profile = self.get_or_create_default_profile(user_id)
         now = utc_now()
         with self._connect() as conn:
             existing = conn.execute(
@@ -646,7 +771,7 @@ class LearningStore:
                         user_id,
                         child_id,
                         subject,
-                        DEFAULT_GRADE,
+                        profile.grade,
                         category,
                         safe_title,
                         normalized_title,

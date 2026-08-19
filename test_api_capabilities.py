@@ -32,7 +32,7 @@ class CapabilityApiTests(unittest.TestCase):
                 "skill.math_problem_solver",
                 "skill.knowledge_lookup",
                 "skill.chinese_literacy_support",
-                "skill.first_grade_learning_support",
+                "skill.primary_learning_support",
             ],
         )
 
@@ -74,10 +74,10 @@ class CapabilityApiTests(unittest.TestCase):
             ["record_chinese_literacy_weakness"],
         )
 
-        first_grade_skill = capabilities[7]
-        self.assertEqual(first_grade_skill["type"], "skill")
-        self.assertEqual(first_grade_skill["name"], "first_grade_learning_support")
-        self.assertEqual(first_grade_skill["tools"], ["record_learning_weakness"])
+        primary_skill = capabilities[7]
+        self.assertEqual(primary_skill["type"], "skill")
+        self.assertEqual(primary_skill["name"], "primary_learning_support")
+        self.assertEqual(primary_skill["tools"], ["record_learning_weakness"])
 
     def test_skills_endpoint_lists_skill_details(self):
         response = self.client.get("/skills")
@@ -93,7 +93,7 @@ class CapabilityApiTests(unittest.TestCase):
                 "math_problem_solver",
                 "knowledge_lookup",
                 "chinese_literacy_support",
-                "first_grade_learning_support",
+                "primary_learning_support",
             ],
         )
 

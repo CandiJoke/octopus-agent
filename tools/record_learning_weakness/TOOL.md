@@ -1,6 +1,6 @@
 ---
 name: record_learning_weakness
-description: 记录一年级语文、英语或数学学习薄弱点。仅当家长明确描述具体问题时使用。输入学科、分类、标题、依据和严重程度。
+description: 记录小学阶段语文、英语或数学学习薄弱点。仅当家长明确描述具体问题时使用。输入学科、分类、标题、依据和严重程度。
 ---
 
 # Record Learning Weakness

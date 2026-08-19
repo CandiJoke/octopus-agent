@@ -40,6 +40,7 @@ from learning_context import current_learning_context, learning_run_context
 from learning_store import (
     DEFAULT_CHILD_ID,
     DEFAULT_SUBJECT,
+    LearningGradeInput,
     LearningStore,
     LearningSubjectInput,
     WeaknessCategoryInput,
@@ -101,6 +102,12 @@ class LearningWeaknessRequest(BaseModel):
         default=None,
         validation_alias=AliasChoices("sourceRunId", "source_run_id"),
     )
+
+
+class ChildProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    grade: LearningGradeInput
 
 
 # ========== 创建 Agent（带 Checkpointer 实现多轮记忆）==========
@@ -591,6 +598,19 @@ def get_default_child_profile(
     store: LearningStore = Depends(get_learning_store),
 ):
     return serialize_child_profile(store.get_or_create_default_profile(user_id))
+
+
+@app.patch("/users/{user_id}/children/default/profile")
+def update_default_child_profile(
+    user_id: str,
+    req: ChildProfileUpdateRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        profile = store.update_default_profile_grade(user_id, req.grade)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_child_profile(profile)
 
 
 @app.get("/users/{user_id}/children/default/weaknesses")

@@ -18,7 +18,7 @@ learning_store.initialize()
 
 class RecordLearningWeaknessInput(BaseModel):
     subject: LearningSubjectInput = Field(
-        description="学科。可用值：chinese/语文，english/英语，math/数学。"
+        description="小学阶段学科。可用值：chinese/语文，english/英语，math/数学。"
     )
     category: str = Field(
         description=(

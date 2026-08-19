@@ -37,7 +37,29 @@ class LearningApiTests(unittest.TestCase):
         self.assertEqual(payload["userId"], "user-a")
         self.assertEqual(payload["childId"], "default")
         self.assertEqual(payload["displayName"], "孩子")
-        self.assertEqual(payload["grade"], "first_grade")
+        self.assertEqual(payload["grade"], "grade_1")
+
+    def test_profile_endpoint_updates_primary_grade(self):
+        response = self.client.patch(
+            "/users/user-a/children/default/profile",
+            json={"grade": "三年级"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["grade"], "grade_3")
+
+        same_profile = self.client.get("/users/user-a/children/default/profile")
+        self.assertEqual(same_profile.status_code, 200)
+        self.assertEqual(same_profile.json()["grade"], "grade_3")
+
+    def test_invalid_profile_grade_returns_422(self):
+        response = self.client.patch(
+            "/users/user-a/children/default/profile",
+            json={"grade": "初一"},
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_create_and_list_weaknesses(self):
         create_response = self.client.post(
@@ -55,7 +77,7 @@ class LearningApiTests(unittest.TestCase):
         created = create_response.json()
         self.assertEqual(created["category"], "pinyin")
         self.assertEqual(created["subject"], "chinese")
-        self.assertEqual(created["grade"], "first_grade")
+        self.assertEqual(created["grade"], "grade_1")
         self.assertEqual(created["status"], "active")
         self.assertEqual(created["sourceRunId"], "run-a")
 
@@ -63,6 +85,25 @@ class LearningApiTests(unittest.TestCase):
         self.assertEqual(list_response.status_code, 200)
         listed = list_response.json()
         self.assertEqual([item["weaknessId"] for item in listed], [created["weaknessId"]])
+
+    def test_created_weakness_uses_updated_primary_grade(self):
+        self.client.patch(
+            "/users/user-a/children/default/profile",
+            json={"grade": "grade_5"},
+        )
+
+        response = self.client.post(
+            "/users/user-a/children/default/subjects/math/weaknesses",
+            json={
+                "category": "计算",
+                "title": "小数计算慢",
+                "evidence": "小数加减法步骤容易漏。",
+                "severity": "medium",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["grade"], "grade_5")
 
     def test_create_weakness_accepts_chinese_enum_aliases(self):
         response = self.client.post(

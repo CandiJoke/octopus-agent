@@ -61,6 +61,14 @@ class ToolsLoaderTests(unittest.TestCase):
         self.assertIn("calculation", schema_text)
         self.assertIn("计算", schema_text)
 
+    def test_learning_tool_metadata_uses_primary_stage_language(self):
+        meta = load_tool_meta(
+            __import__("tools").registry.TOOLS_DIR / "record_learning_weakness"
+        )
+
+        self.assertIn("小学阶段", meta["description"])
+        self.assertNotIn("一年级", meta["description"])
+
 
 if __name__ == "__main__":
     unittest.main()
