@@ -43,6 +43,8 @@ from learning_store import (
     DEFAULT_CHILD_ID,
     DEFAULT_SUBJECT,
     LearningGradeInput,
+    LearningPlanCheckinStatus,
+    LearningPlanStatus,
     LearningStore,
     LearningSubjectInput,
     WeaknessCategoryInput,
@@ -53,6 +55,7 @@ from learning_store import (
     normalize_severity_value,
     normalize_subject_value,
     serialize_child_profile,
+    serialize_learning_plan,
     serialize_learning_weakness,
 )
 from tools import tools
@@ -130,6 +133,40 @@ class LearningWeaknessStatusRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     status: WeaknessStatus
+
+
+class LearningPlanCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    goal: str | None = None
+    created_from_prompt: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("createdFromPrompt", "created_from_prompt"),
+    )
+    start_date: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("startDate", "start_date"),
+    )
+    end_date: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("endDate", "end_date"),
+    )
+
+
+class LearningPlanStatusRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: LearningPlanStatus
+
+
+class LearningPlanCheckinRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    checkin_date: str = Field(
+        validation_alias=AliasChoices("checkinDate", "checkin_date"),
+    )
+    status: LearningPlanCheckinStatus
+    note: str | None = None
 
 
 # ========== 创建 Agent（带 Checkpointer 实现多轮记忆）==========
@@ -739,6 +776,79 @@ def update_default_child_weakness_status(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return serialize_learning_weakness(record)
+
+
+@app.get("/users/{user_id}/children/default/learning-plans/current")
+def get_current_default_child_learning_plan(
+    user_id: str,
+    store: LearningStore = Depends(get_learning_store),
+):
+    snapshot = store.get_current_learning_plan(user_id, DEFAULT_CHILD_ID)
+    if snapshot is None:
+        return None
+    return serialize_learning_plan(snapshot)
+
+
+@app.post("/users/{user_id}/children/default/learning-plans")
+def create_default_child_learning_plan(
+    user_id: str,
+    req: LearningPlanCreateRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        snapshot = store.create_learning_plan_from_weaknesses(
+            user_id,
+            DEFAULT_CHILD_ID,
+            goal=req.goal,
+            created_from_prompt=req.created_from_prompt,
+            start_date=req.start_date,
+            end_date=req.end_date,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_learning_plan(snapshot)
+
+
+@app.patch("/users/{user_id}/children/default/learning-plans/{plan_id}/status")
+def update_default_child_learning_plan_status(
+    user_id: str,
+    plan_id: str,
+    req: LearningPlanStatusRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        snapshot = store.update_learning_plan_status(user_id, plan_id, req.status)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_learning_plan(snapshot)
+
+
+@app.post(
+    "/users/{user_id}/children/default/learning-plans/{plan_id}/items/{item_id}/checkins"
+)
+def check_in_default_child_learning_plan_item(
+    user_id: str,
+    plan_id: str,
+    item_id: str,
+    req: LearningPlanCheckinRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        snapshot = store.upsert_learning_plan_checkin(
+            user_id,
+            plan_id,
+            item_id,
+            checkin_date=req.checkin_date,
+            status=req.status,
+            note=req.note,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_learning_plan(snapshot)
 
 
 @app.post("/users/{user_id}/sessions")

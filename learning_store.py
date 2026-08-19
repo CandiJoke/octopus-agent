@@ -72,6 +72,8 @@ WeaknessCategory = Literal[
 ]
 WeaknessSeverity = Literal["mild", "medium", "high"]
 WeaknessStatus = Literal["active", "improving", "resolved"]
+LearningPlanStatus = Literal["draft", "active", "paused", "completed", "archived"]
+LearningPlanCheckinStatus = Literal["done", "partial", "skipped"]
 ChineseWeaknessCategoryInput = Literal[
     "pinyin",
     "character_recognition",
@@ -146,6 +148,30 @@ VALID_SUBJECTS = {"chinese", "english", "math"}
 VALID_GRADES = {"grade_1", "grade_2", "grade_3", "grade_4", "grade_5", "grade_6"}
 VALID_SEVERITIES = {"mild", "medium", "high"}
 VALID_STATUSES = {"active", "improving", "resolved"}
+VALID_PLAN_STATUSES = {"draft", "active", "paused", "completed", "archived"}
+VALID_PLAN_CHECKIN_STATUSES = {"done", "partial", "skipped"}
+SUBJECT_SORT_ORDER = {"chinese": 0, "english": 1, "math": 2}
+SEVERITY_SORT_ORDER = {"high": 0, "medium": 1, "mild": 2}
+SUBJECT_LABELS = {
+    "chinese": "语文",
+    "english": "英语",
+    "math": "数学",
+}
+CATEGORY_LABELS = {
+    "pinyin": "拼音",
+    "character_recognition": "识字",
+    "reading": "朗读",
+    "expression": "表达",
+    "learning_habit": "学习习惯",
+    "listening": "听音",
+    "phonics": "拼读",
+    "vocabulary": "词汇",
+    "speaking": "口语",
+    "number_sense": "数感",
+    "calculation": "计算",
+    "word_problem": "应用题",
+    "geometry": "图形空间",
+}
 GRADE_ALIASES = {
     "grade_1": "grade_1",
     "first_grade": "grade_1",
@@ -328,6 +354,59 @@ class LearningWeaknessRecord:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class LearningPlanRecord:
+    plan_id: str
+    user_id: str
+    child_id: str
+    title: str
+    goal: str
+    status: str
+    start_date: str | None
+    end_date: str | None
+    created_from_prompt: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class LearningPlanItemRecord:
+    item_id: str
+    plan_id: str
+    user_id: str
+    child_id: str
+    subject: str
+    title: str
+    description: str
+    target_weakness_id: str | None
+    frequency: str
+    estimated_minutes: int
+    sort_order: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class LearningPlanCheckinRecord:
+    checkin_id: str
+    plan_id: str
+    item_id: str
+    user_id: str
+    child_id: str
+    checkin_date: str
+    status: str
+    note: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class LearningPlanSnapshot:
+    plan: LearningPlanRecord
+    items: list[LearningPlanItemRecord]
+    checkins_by_item_id: dict[str, list[LearningPlanCheckinRecord]]
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -475,6 +554,67 @@ def validate_status(status: str) -> None:
         raise ValueError(f"unsupported weakness status: {status}")
 
 
+def validate_plan_status(status: str) -> None:
+    if status not in VALID_PLAN_STATUSES:
+        raise ValueError(f"unsupported learning plan status: {status}")
+
+
+def validate_plan_checkin_status(status: str) -> None:
+    if status not in VALID_PLAN_CHECKIN_STATUSES:
+        raise ValueError(f"unsupported learning plan checkin status: {status}")
+
+
+def normalize_plan_date(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    try:
+        datetime.strptime(normalized, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError(f"invalid learning plan date: {value}") from exc
+    return normalized
+
+
+def frequency_for_severity(severity: str) -> str:
+    if severity == "high":
+        return "每天"
+    if severity == "medium":
+        return "每周 3 次"
+    return "每周 2 次"
+
+
+def minutes_for_severity(severity: str) -> int:
+    if severity == "high":
+        return 15
+    if severity == "medium":
+        return 12
+    return 10
+
+
+def learning_plan_item_from_weakness(
+    record: LearningWeaknessRecord,
+    sort_order: int,
+) -> dict[str, object]:
+    payload = serialize_learning_weakness(record)
+    behavior_title = payload.get("behaviorTitle")
+    category_label = CATEGORY_LABELS.get(record.category, record.category)
+    subject_label = SUBJECT_LABELS.get(record.subject, record.subject)
+    focus = (
+        f"围绕“{behavior_title}”进行观察和练习"
+        if behavior_title
+        else f"围绕“{record.evidence}”进行短练习"
+    )
+    return {
+        "subject": record.subject,
+        "title": f"{subject_label} · {category_label}：{record.title}",
+        "description": f"{focus}，结束后记录孩子是否能稳定完成。",
+        "target_weakness_id": record.weakness_id,
+        "frequency": frequency_for_severity(record.severity),
+        "estimated_minutes": minutes_for_severity(record.severity),
+        "sort_order": sort_order,
+    }
+
+
 class LearningStore:
     def __init__(self, db_path: str | Path):
         self.db_path = Path(db_path)
@@ -552,6 +692,75 @@ class LearningStore:
 
             CREATE INDEX IF NOT EXISTS idx_learning_weaknesses_user_child_status
                 ON learning_weaknesses(user_id, child_id, status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS learning_plans (
+                plan_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                child_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                goal TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('draft', 'active', 'paused', 'completed', 'archived')
+                ),
+                start_date TEXT,
+                end_date TEXT,
+                created_from_prompt TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(user_id, child_id)
+                    REFERENCES child_profiles(user_id, child_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_learning_plans_user_child_status
+                ON learning_plans(user_id, child_id, status, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS learning_plan_items (
+                item_id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                child_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                target_weakness_id TEXT,
+                frequency TEXT NOT NULL,
+                estimated_minutes INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(plan_id)
+                    REFERENCES learning_plans(plan_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY(user_id, child_id)
+                    REFERENCES child_profiles(user_id, child_id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_learning_plan_items_plan_order
+                ON learning_plan_items(plan_id, sort_order ASC);
+
+            CREATE TABLE IF NOT EXISTS learning_plan_checkins (
+                checkin_id TEXT PRIMARY KEY,
+                plan_id TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                child_id TEXT NOT NULL,
+                checkin_date TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('done', 'partial', 'skipped')),
+                note TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(plan_id)
+                    REFERENCES learning_plans(plan_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY(item_id)
+                    REFERENCES learning_plan_items(item_id)
+                    ON DELETE CASCADE,
+                FOREIGN KEY(user_id, child_id)
+                    REFERENCES child_profiles(user_id, child_id)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_plan_checkins_item_date
+                ON learning_plan_checkins(user_id, child_id, item_id, checkin_date);
             """
         )
         self._migrate_learning_weaknesses_schema(conn)
@@ -1039,6 +1248,252 @@ class LearningStore:
         with self._connect() as conn:
             return self._get_weakness(conn, user_id, weakness_id)
 
+    def create_learning_plan_from_weaknesses(
+        self,
+        user_id: str,
+        child_id: str = DEFAULT_CHILD_ID,
+        goal: str | None = None,
+        created_from_prompt: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> LearningPlanSnapshot:
+        profile = self.get_or_create_default_profile(user_id)
+        normalized_start_date = normalize_plan_date(start_date)
+        normalized_end_date = normalize_plan_date(end_date)
+        active_records = [
+            record
+            for record in self.list_weaknesses(user_id, child_id)
+            if record.status in ("active", "improving")
+        ]
+        if not active_records:
+            raise ValueError("learning plan requires active weaknesses")
+
+        selected_records = sorted(
+            active_records,
+            key=lambda record: (
+                SUBJECT_SORT_ORDER.get(record.subject, 99),
+                SEVERITY_SORT_ORDER.get(record.severity, 99),
+                record.updated_at,
+            ),
+        )[:6]
+        safe_prompt = sanitize_learning_text(created_from_prompt or "")
+        safe_goal = sanitize_learning_text(goal or safe_prompt)
+        if not safe_goal:
+            safe_goal = "基于当前薄弱点安排一周可执行练习。"
+
+        now = utc_now()
+        plan_id = new_id("plan")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO learning_plans(
+                    plan_id, user_id, child_id, title, goal, status,
+                    start_date, end_date, created_from_prompt, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    plan_id,
+                    user_id,
+                    profile.child_id,
+                    "本周学习计划",
+                    safe_goal,
+                    "draft",
+                    normalized_start_date,
+                    normalized_end_date,
+                    safe_prompt,
+                    now,
+                    now,
+                ),
+            )
+            for sort_order, record in enumerate(selected_records, start=1):
+                item = learning_plan_item_from_weakness(record, sort_order)
+                conn.execute(
+                    """
+                    INSERT INTO learning_plan_items(
+                        item_id, plan_id, user_id, child_id, subject, title,
+                        description, target_weakness_id, frequency,
+                        estimated_minutes, sort_order, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_id("plan_item"),
+                        plan_id,
+                        user_id,
+                        profile.child_id,
+                        item["subject"],
+                        item["title"],
+                        item["description"],
+                        item["target_weakness_id"],
+                        item["frequency"],
+                        item["estimated_minutes"],
+                        item["sort_order"],
+                        now,
+                        now,
+                    ),
+                )
+            conn.commit()
+            return self._get_learning_plan_snapshot(conn, user_id, plan_id)
+
+    def list_learning_plans(
+        self,
+        user_id: str,
+        child_id: str = DEFAULT_CHILD_ID,
+        status: str | None = None,
+    ) -> list[LearningPlanRecord]:
+        params: list[str] = [user_id, child_id]
+        where_status = ""
+        if status is not None:
+            validate_plan_status(status)
+            where_status = "AND status = ?"
+            params.append(status)
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    plan_id, user_id, child_id, title, goal, status,
+                    start_date, end_date, created_from_prompt,
+                    created_at, updated_at
+                FROM learning_plans
+                WHERE user_id = ? AND child_id = ?
+                {where_status}
+                ORDER BY updated_at DESC, plan_id DESC
+                """,
+                params,
+            ).fetchall()
+            return [learning_plan_from_row(row) for row in rows]
+
+    def get_current_learning_plan(
+        self,
+        user_id: str,
+        child_id: str = DEFAULT_CHILD_ID,
+    ) -> LearningPlanSnapshot | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT plan_id
+                FROM learning_plans
+                WHERE user_id = ? AND child_id = ? AND status != 'archived'
+                ORDER BY
+                    CASE status
+                        WHEN 'active' THEN 0
+                        WHEN 'draft' THEN 1
+                        WHEN 'paused' THEN 2
+                        WHEN 'completed' THEN 3
+                        ELSE 4
+                    END ASC,
+                    updated_at DESC,
+                    plan_id DESC
+                LIMIT 1
+                """,
+                (user_id, child_id),
+            ).fetchone()
+            if row is None:
+                return None
+            return self._get_learning_plan_snapshot(conn, user_id, str(row["plan_id"]))
+
+    def update_learning_plan_status(
+        self,
+        user_id: str,
+        plan_id: str,
+        status: str,
+    ) -> LearningPlanSnapshot:
+        validate_plan_status(status)
+        now = utc_now()
+        with self._connect() as conn:
+            updated = conn.execute(
+                """
+                UPDATE learning_plans
+                SET status = ?, updated_at = ?
+                WHERE user_id = ? AND plan_id = ?
+                """,
+                (status, now, user_id, plan_id),
+            ).rowcount
+            if updated == 0:
+                raise LookupError(f"learning plan not found: {plan_id}")
+            conn.commit()
+            return self._get_learning_plan_snapshot(conn, user_id, plan_id)
+
+    def upsert_learning_plan_checkin(
+        self,
+        user_id: str,
+        plan_id: str,
+        item_id: str,
+        checkin_date: str,
+        status: str,
+        note: str | None = None,
+    ) -> LearningPlanSnapshot:
+        normalized_date = normalize_plan_date(checkin_date)
+        if normalized_date is None:
+            raise ValueError("learning plan checkin date is required")
+        validate_plan_checkin_status(status)
+        safe_note = sanitize_learning_text(note or "")
+        now = utc_now()
+        with self._connect() as conn:
+            item = conn.execute(
+                """
+                SELECT item_id
+                FROM learning_plan_items
+                WHERE user_id = ? AND plan_id = ? AND item_id = ?
+                """,
+                (user_id, plan_id, item_id),
+            ).fetchone()
+            if item is None:
+                raise LookupError(f"learning plan item not found: {item_id}")
+
+            existing = conn.execute(
+                """
+                SELECT checkin_id
+                FROM learning_plan_checkins
+                WHERE user_id = ? AND plan_id = ? AND item_id = ? AND checkin_date = ?
+                """,
+                (user_id, plan_id, item_id, normalized_date),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO learning_plan_checkins(
+                        checkin_id, plan_id, item_id, user_id, child_id,
+                        checkin_date, status, note, created_at, updated_at
+                    )
+                    SELECT ?, plan_id, item_id, user_id, child_id, ?, ?, ?, ?, ?
+                    FROM learning_plan_items
+                    WHERE user_id = ? AND plan_id = ? AND item_id = ?
+                    """,
+                    (
+                        new_id("checkin"),
+                        normalized_date,
+                        status,
+                        safe_note,
+                        now,
+                        now,
+                        user_id,
+                        plan_id,
+                        item_id,
+                    ),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE learning_plan_checkins
+                    SET status = ?, note = ?, updated_at = ?
+                    WHERE user_id = ? AND checkin_id = ?
+                    """,
+                    (status, safe_note, now, user_id, str(existing["checkin_id"])),
+                )
+            conn.execute(
+                """
+                UPDATE learning_plans
+                SET updated_at = ?
+                WHERE user_id = ? AND plan_id = ?
+                """,
+                (now, user_id, plan_id),
+            )
+            conn.commit()
+            return self._get_learning_plan_snapshot(conn, user_id, plan_id)
+
     def _get_weakness(
         self,
         conn: sqlite3.Connection,
@@ -1060,6 +1515,67 @@ class LearningStore:
         if row is None:
             raise LookupError(f"weakness not found: {weakness_id}")
         return learning_weakness_from_row(row)
+
+    def _get_learning_plan_snapshot(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        plan_id: str,
+    ) -> LearningPlanSnapshot:
+        plan_row = conn.execute(
+            """
+            SELECT
+                plan_id, user_id, child_id, title, goal, status,
+                start_date, end_date, created_from_prompt, created_at, updated_at
+            FROM learning_plans
+            WHERE user_id = ? AND plan_id = ?
+            """,
+            (user_id, plan_id),
+        ).fetchone()
+        if plan_row is None:
+            raise LookupError(f"learning plan not found: {plan_id}")
+
+        item_rows = conn.execute(
+            """
+            SELECT
+                item_id, plan_id, user_id, child_id, subject, title,
+                description, target_weakness_id, frequency, estimated_minutes,
+                sort_order, created_at, updated_at
+            FROM learning_plan_items
+            WHERE user_id = ? AND plan_id = ?
+            ORDER BY
+                CASE subject
+                    WHEN 'chinese' THEN 0
+                    WHEN 'english' THEN 1
+                    WHEN 'math' THEN 2
+                    ELSE 3
+                END ASC,
+                sort_order ASC,
+                item_id ASC
+            """,
+            (user_id, plan_id),
+        ).fetchall()
+        checkin_rows = conn.execute(
+            """
+            SELECT
+                checkin_id, plan_id, item_id, user_id, child_id,
+                checkin_date, status, note, created_at, updated_at
+            FROM learning_plan_checkins
+            WHERE user_id = ? AND plan_id = ?
+            ORDER BY checkin_date DESC, updated_at DESC
+            """,
+            (user_id, plan_id),
+        ).fetchall()
+        checkins_by_item_id: dict[str, list[LearningPlanCheckinRecord]] = {}
+        for row in checkin_rows:
+            record = learning_plan_checkin_from_row(row)
+            checkins_by_item_id.setdefault(record.item_id, []).append(record)
+
+        return LearningPlanSnapshot(
+            plan=learning_plan_from_row(plan_row),
+            items=[learning_plan_item_from_row(row) for row in item_rows],
+            checkins_by_item_id=checkins_by_item_id,
+        )
 
 
 def child_profile_from_row(row: sqlite3.Row) -> ChildProfileRecord:
@@ -1096,6 +1612,60 @@ def learning_weakness_from_row(row: sqlite3.Row) -> LearningWeaknessRecord:
         match_confidence=(
             float(match_confidence) if match_confidence is not None else None
         ),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def learning_plan_from_row(row: sqlite3.Row) -> LearningPlanRecord:
+    start_date = row["start_date"]
+    end_date = row["end_date"]
+    return LearningPlanRecord(
+        plan_id=str(row["plan_id"]),
+        user_id=str(row["user_id"]),
+        child_id=str(row["child_id"]),
+        title=str(row["title"]),
+        goal=str(row["goal"]),
+        status=str(row["status"]),
+        start_date=str(start_date) if start_date is not None else None,
+        end_date=str(end_date) if end_date is not None else None,
+        created_from_prompt=str(row["created_from_prompt"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def learning_plan_item_from_row(row: sqlite3.Row) -> LearningPlanItemRecord:
+    target_weakness_id = row["target_weakness_id"]
+    return LearningPlanItemRecord(
+        item_id=str(row["item_id"]),
+        plan_id=str(row["plan_id"]),
+        user_id=str(row["user_id"]),
+        child_id=str(row["child_id"]),
+        subject=str(row["subject"]),
+        title=str(row["title"]),
+        description=str(row["description"]),
+        target_weakness_id=(
+            str(target_weakness_id) if target_weakness_id is not None else None
+        ),
+        frequency=str(row["frequency"]),
+        estimated_minutes=int(row["estimated_minutes"]),
+        sort_order=int(row["sort_order"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
+def learning_plan_checkin_from_row(row: sqlite3.Row) -> LearningPlanCheckinRecord:
+    return LearningPlanCheckinRecord(
+        checkin_id=str(row["checkin_id"]),
+        plan_id=str(row["plan_id"]),
+        item_id=str(row["item_id"]),
+        user_id=str(row["user_id"]),
+        child_id=str(row["child_id"]),
+        checkin_date=str(row["checkin_date"]),
+        status=str(row["status"]),
+        note=str(row["note"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -1157,3 +1727,58 @@ def serialize_learning_weakness(record: LearningWeaknessRecord) -> dict[str, obj
     if record.match_confidence is not None:
         payload["matchConfidence"] = record.match_confidence
     return payload
+
+
+def serialize_learning_plan_checkin(
+    record: LearningPlanCheckinRecord,
+) -> dict[str, object]:
+    return {
+        "checkinId": record.checkin_id,
+        "planId": record.plan_id,
+        "itemId": record.item_id,
+        "userId": record.user_id,
+        "childId": record.child_id,
+        "checkinDate": record.checkin_date,
+        "status": record.status,
+        "note": record.note,
+        "createdAt": record.created_at,
+        "updatedAt": record.updated_at,
+    }
+
+
+def serialize_learning_plan(snapshot: LearningPlanSnapshot) -> dict[str, object]:
+    return {
+        "planId": snapshot.plan.plan_id,
+        "userId": snapshot.plan.user_id,
+        "childId": snapshot.plan.child_id,
+        "title": snapshot.plan.title,
+        "goal": snapshot.plan.goal,
+        "status": snapshot.plan.status,
+        "startDate": snapshot.plan.start_date,
+        "endDate": snapshot.plan.end_date,
+        "createdFromPrompt": snapshot.plan.created_from_prompt,
+        "createdAt": snapshot.plan.created_at,
+        "updatedAt": snapshot.plan.updated_at,
+        "items": [
+            {
+                "itemId": item.item_id,
+                "planId": item.plan_id,
+                "userId": item.user_id,
+                "childId": item.child_id,
+                "subject": item.subject,
+                "title": item.title,
+                "description": item.description,
+                "targetWeaknessId": item.target_weakness_id,
+                "frequency": item.frequency,
+                "estimatedMinutes": item.estimated_minutes,
+                "sortOrder": item.sort_order,
+                "createdAt": item.created_at,
+                "updatedAt": item.updated_at,
+                "checkins": [
+                    serialize_learning_plan_checkin(checkin)
+                    for checkin in snapshot.checkins_by_item_id.get(item.item_id, [])
+                ],
+            }
+            for item in snapshot.items
+        ],
+    }

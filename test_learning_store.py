@@ -11,6 +11,7 @@ from learning_store import (
     normalize_grade_value,
     normalize_title,
     serialize_child_profile,
+    serialize_learning_plan,
     serialize_learning_weakness,
     utc_now,
 )
@@ -679,6 +680,92 @@ class LearningStoreTests(unittest.TestCase):
 
         self.assertEqual(len(self.store.list_weaknesses("user-a")), 1)
         self.assertEqual(len(self.store.list_weaknesses("user-a", status="active")), 0)
+
+    def test_learning_plan_from_active_weaknesses_supports_flow_and_checkins(self):
+        chinese, _ = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            category="pinyin",
+            title="b/p/d/q 混淆",
+            evidence="拼读时经常混淆。",
+            severity="high",
+            behavior_id="chinese_g1_pinyin_initials_distinguish_bpdq",
+        )
+        english, _ = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="english",
+            category="phonics",
+            title="b/d 字母认反",
+            evidence="经常把 b 和 d 看反。",
+            severity="medium",
+        )
+
+        snapshot = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="请制定一周学习计划，每天 15 分钟。",
+            start_date="2026-08-19",
+            end_date="2026-08-25",
+        )
+
+        self.assertEqual(snapshot.plan.status, "draft")
+        self.assertEqual(snapshot.plan.start_date, "2026-08-19")
+        self.assertEqual(snapshot.plan.end_date, "2026-08-25")
+        self.assertEqual(
+            {item.target_weakness_id for item in snapshot.items},
+            {chinese.weakness_id, english.weakness_id},
+        )
+        self.assertEqual(
+            [item.subject for item in snapshot.items],
+            ["chinese", "english"],
+        )
+
+        active_snapshot = self.store.update_learning_plan_status(
+            "user-a",
+            snapshot.plan.plan_id,
+            "active",
+        )
+        self.assertEqual(active_snapshot.plan.status, "active")
+
+        checked_snapshot = self.store.upsert_learning_plan_checkin(
+            "user-a",
+            snapshot.plan.plan_id,
+            snapshot.items[0].item_id,
+            checkin_date="2026-08-19",
+            status="done",
+            note="今天完成 15 分钟。",
+        )
+        payload = serialize_learning_plan(checked_snapshot)
+        self.assertEqual(payload["planId"], snapshot.plan.plan_id)
+        self.assertEqual(payload["createdFromPrompt"], "请制定一周学习计划，每天 15 分钟。")
+        self.assertEqual(payload["items"][0]["checkins"][0]["status"], "done")
+        self.assertEqual(payload["items"][0]["checkins"][0]["checkinDate"], "2026-08-19")
+        self.assertEqual(payload["items"][0]["targetWeaknessId"], chinese.weakness_id)
+
+    def test_learning_plan_schema_allows_parallel_active_plans(self):
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="math",
+            category="calculation",
+            title="口算慢",
+            evidence="10 以内口算会停很久。",
+            severity="medium",
+        )
+        first = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="本周口算计划。",
+        )
+        second = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="周末专项计划。",
+        )
+
+        self.store.update_learning_plan_status("user-a", first.plan.plan_id, "active")
+        self.store.update_learning_plan_status("user-a", second.plan.plan_id, "active")
+
+        plans = self.store.list_learning_plans("user-a", status="active")
+        self.assertEqual({plan.plan_id for plan in plans}, {first.plan.plan_id, second.plan.plan_id})
 
     def test_weakness_serializes_to_camel_case(self):
         record, _ = self.store.upsert_weakness(

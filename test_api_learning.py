@@ -356,6 +356,88 @@ class LearningApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
+    def test_learning_plan_api_saves_flow_and_checkins(self):
+        chinese_response = self.client.post(
+            "/users/user-a/children/default/weaknesses",
+            json={
+                "category": "pinyin",
+                "title": "b/p/d/q 混淆",
+                "evidence": "拼读时经常混淆。",
+                "severity": "high",
+                "behaviorId": "chinese_g1_pinyin_initials_distinguish_bpdq",
+            },
+        )
+        math_response = self.client.post(
+            "/users/user-a/children/default/subjects/math/weaknesses",
+            json={
+                "category": "计算",
+                "title": "口算慢",
+                "evidence": "10 以内口算会停很久。",
+                "severity": "medium",
+            },
+        )
+        chinese_weakness_id = chinese_response.json()["weaknessId"]
+        math_weakness_id = math_response.json()["weaknessId"]
+
+        create_response = self.client.post(
+            "/users/user-a/children/default/learning-plans",
+            json={
+                "createdFromPrompt": "请制定一周学习计划，每天 15 分钟。",
+                "startDate": "2026-08-19",
+                "endDate": "2026-08-25",
+            },
+        )
+
+        self.assertEqual(create_response.status_code, 200)
+        created = create_response.json()
+        self.assertEqual(created["status"], "draft")
+        self.assertEqual(created["createdFromPrompt"], "请制定一周学习计划，每天 15 分钟。")
+        self.assertEqual(created["startDate"], "2026-08-19")
+        self.assertEqual(created["endDate"], "2026-08-25")
+        self.assertEqual(
+            {item["targetWeaknessId"] for item in created["items"]},
+            {chinese_weakness_id, math_weakness_id},
+        )
+        self.assertEqual([item["subject"] for item in created["items"]], ["chinese", "math"])
+
+        current_response = self.client.get(
+            "/users/user-a/children/default/learning-plans/current"
+        )
+        self.assertEqual(current_response.status_code, 200)
+        self.assertEqual(current_response.json()["planId"], created["planId"])
+
+        active_response = self.client.patch(
+            f"/users/user-a/children/default/learning-plans/{created['planId']}/status",
+            json={"status": "active"},
+        )
+        self.assertEqual(active_response.status_code, 200)
+        self.assertEqual(active_response.json()["status"], "active")
+
+        item_id = active_response.json()["items"][0]["itemId"]
+        checkin_response = self.client.post(
+            f"/users/user-a/children/default/learning-plans/{created['planId']}/items/{item_id}/checkins",
+            json={
+                "checkinDate": "2026-08-19",
+                "status": "done",
+                "note": "今天完成 15 分钟。",
+            },
+        )
+        self.assertEqual(checkin_response.status_code, 200)
+        checked = checkin_response.json()
+        self.assertEqual(checked["items"][0]["checkins"][0]["status"], "done")
+        self.assertEqual(
+            checked["items"][0]["checkins"][0]["checkinDate"],
+            "2026-08-19",
+        )
+
+    def test_current_learning_plan_returns_null_when_empty(self):
+        response = self.client.get(
+            "/users/user-a/children/default/learning-plans/current"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.json())
+
 
 if __name__ == "__main__":
     unittest.main()
