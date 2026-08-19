@@ -4,7 +4,7 @@ import sqlite3
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -150,6 +150,7 @@ VALID_SEVERITIES = {"mild", "medium", "high"}
 VALID_STATUSES = {"active", "improving", "resolved"}
 VALID_PLAN_STATUSES = {"draft", "active", "paused", "completed", "archived"}
 VALID_PLAN_CHECKIN_STATUSES = {"done", "partial", "skipped"}
+MAX_LEARNING_CALENDAR_RANGE_DAYS = 31
 SUBJECT_SORT_ORDER = {"chinese": 0, "english": 1, "math": 2}
 SEVERITY_SORT_ORDER = {"high": 0, "medium": 1, "mild": 2}
 SUBJECT_LABELS = {
@@ -407,6 +408,53 @@ class LearningPlanSnapshot:
     checkins_by_item_id: dict[str, list[LearningPlanCheckinRecord]]
 
 
+@dataclass(frozen=True)
+class LearningPlanSummary:
+    plan_id: str
+    user_id: str
+    child_id: str
+    title: str
+    goal: str
+    status: str
+    start_date: str | None
+    end_date: str | None
+    created_from_prompt: str
+    item_count: int
+    today_checkin_count: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class LearningCalendarItem:
+    item_id: str
+    subject: str
+    title: str
+    estimated_minutes: int
+    checkin: LearningPlanCheckinRecord | None
+
+
+@dataclass(frozen=True)
+class LearningCalendarPlan:
+    plan_id: str
+    title: str
+    status: str
+    items: list[LearningCalendarItem]
+
+
+@dataclass(frozen=True)
+class LearningCalendarDay:
+    date: str
+    plans: list[LearningCalendarPlan]
+
+
+@dataclass(frozen=True)
+class LearningCalendar:
+    from_date: str
+    to_date: str
+    days: list[LearningCalendarDay]
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -573,6 +621,32 @@ def normalize_plan_date(value: str | None) -> str | None:
     except ValueError as exc:
         raise ValueError(f"invalid learning plan date: {value}") from exc
     return normalized
+
+
+def parse_plan_date(value: str) -> date:
+    normalized = normalize_plan_date(value)
+    if normalized is None:
+        raise ValueError("learning plan date is required")
+    return datetime.strptime(normalized, "%Y-%m-%d").date()
+
+
+def inclusive_plan_dates(from_date: str, to_date: str) -> list[str]:
+    start = parse_plan_date(from_date)
+    end = parse_plan_date(to_date)
+    if start > end:
+        raise ValueError("learning calendar from date must be before to date")
+    day_count = (end - start).days + 1
+    if day_count > MAX_LEARNING_CALENDAR_RANGE_DAYS:
+        raise ValueError("learning calendar range must be at most 31 days")
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(day_count)]
+
+
+def plan_is_visible_on_date(plan: LearningPlanRecord, day: str) -> bool:
+    if plan.start_date is not None and day < plan.start_date:
+        return False
+    if plan.end_date is not None and day > plan.end_date:
+        return False
+    return True
 
 
 def frequency_for_severity(severity: str) -> str:
@@ -1365,6 +1439,209 @@ class LearningStore:
             ).fetchall()
             return [learning_plan_from_row(row) for row in rows]
 
+    def list_learning_plan_summaries(
+        self,
+        user_id: str,
+        child_id: str = DEFAULT_CHILD_ID,
+        status: str | None = None,
+        limit: int = 20,
+        today: str | None = None,
+    ) -> list[LearningPlanSummary]:
+        safe_limit = min(max(limit, 1), 100)
+        today = normalize_plan_date(today) or datetime.now(UTC).date().isoformat()
+        params: list[object] = [today, user_id, child_id]
+        where_status = ""
+        if status is not None:
+            validate_plan_status(status)
+            where_status = "AND p.status = ?"
+            params.append(status)
+        params.append(safe_limit)
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    p.plan_id,
+                    p.user_id,
+                    p.child_id,
+                    p.title,
+                    p.goal,
+                    p.status,
+                    p.start_date,
+                    p.end_date,
+                    p.created_from_prompt,
+                    p.created_at,
+                    p.updated_at,
+                    COUNT(DISTINCT i.item_id) AS item_count,
+                    COUNT(DISTINCT c.checkin_id) AS today_checkin_count
+                FROM learning_plans p
+                LEFT JOIN learning_plan_items i
+                    ON i.plan_id = p.plan_id
+                LEFT JOIN learning_plan_checkins c
+                    ON c.item_id = i.item_id
+                    AND c.checkin_date = ?
+                WHERE p.user_id = ? AND p.child_id = ?
+                {where_status}
+                GROUP BY p.plan_id
+                ORDER BY
+                    CASE p.status
+                        WHEN 'active' THEN 0
+                        WHEN 'draft' THEN 1
+                        WHEN 'paused' THEN 2
+                        WHEN 'completed' THEN 3
+                        WHEN 'archived' THEN 4
+                        ELSE 5
+                    END ASC,
+                    p.updated_at DESC,
+                    p.plan_id DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+            return [learning_plan_summary_from_row(row) for row in rows]
+
+    def get_learning_plan(
+        self,
+        user_id: str,
+        plan_id: str,
+    ) -> LearningPlanSnapshot:
+        with self._connect() as conn:
+            return self._get_learning_plan_snapshot(conn, user_id, plan_id)
+
+    def get_learning_calendar(
+        self,
+        user_id: str,
+        from_date: str,
+        to_date: str,
+        child_id: str = DEFAULT_CHILD_ID,
+        plan_id: str | None = None,
+        status: str | None = None,
+    ) -> LearningCalendar:
+        days = inclusive_plan_dates(from_date, to_date)
+        params: list[object] = [user_id, child_id]
+        where_plan = ""
+        where_status = "AND p.status != 'archived'"
+        if plan_id is not None:
+            where_plan = "AND p.plan_id = ?"
+            where_status = ""
+            params.append(plan_id)
+        elif status is not None:
+            validate_plan_status(status)
+            where_status = "AND p.status = ?"
+            params.append(status)
+
+        with self._connect() as conn:
+            plan_rows = conn.execute(
+                f"""
+                SELECT
+                    p.plan_id,
+                    p.user_id,
+                    p.child_id,
+                    p.title,
+                    p.goal,
+                    p.status,
+                    p.start_date,
+                    p.end_date,
+                    p.created_from_prompt,
+                    p.created_at,
+                    p.updated_at
+                FROM learning_plans p
+                WHERE p.user_id = ? AND p.child_id = ?
+                {where_plan}
+                {where_status}
+                ORDER BY
+                    CASE p.status
+                        WHEN 'active' THEN 0
+                        WHEN 'draft' THEN 1
+                        WHEN 'paused' THEN 2
+                        WHEN 'completed' THEN 3
+                        ELSE 4
+                    END ASC,
+                    p.updated_at DESC,
+                    p.plan_id DESC
+                """,
+                params,
+            ).fetchall()
+            plans = [learning_plan_from_row(row) for row in plan_rows]
+            if plan_id is not None and not plans:
+                raise LookupError(f"learning plan not found: {plan_id}")
+
+            plan_ids = [plan.plan_id for plan in plans]
+            items_by_plan_id: dict[str, list[LearningPlanItemRecord]] = {
+                current_plan_id: [] for current_plan_id in plan_ids
+            }
+            checkins_by_item_date: dict[
+                tuple[str, str],
+                LearningPlanCheckinRecord,
+            ] = {}
+            if plan_ids:
+                placeholders = ",".join("?" for _ in plan_ids)
+                item_rows = conn.execute(
+                    f"""
+                    SELECT
+                        item_id, plan_id, user_id, child_id, subject, title,
+                        description, target_weakness_id, frequency,
+                        estimated_minutes, sort_order, created_at, updated_at
+                    FROM learning_plan_items
+                    WHERE user_id = ? AND plan_id IN ({placeholders})
+                    ORDER BY sort_order ASC, item_id ASC
+                    """,
+                    [user_id, *plan_ids],
+                ).fetchall()
+                items = [learning_plan_item_from_row(row) for row in item_rows]
+                for item in items:
+                    items_by_plan_id.setdefault(item.plan_id, []).append(item)
+
+                item_ids = [item.item_id for item in items]
+                if item_ids:
+                    item_placeholders = ",".join("?" for _ in item_ids)
+                    checkin_rows = conn.execute(
+                        f"""
+                        SELECT
+                            checkin_id, plan_id, item_id, user_id, child_id,
+                            checkin_date, status, note, created_at, updated_at
+                        FROM learning_plan_checkins
+                        WHERE user_id = ?
+                            AND item_id IN ({item_placeholders})
+                            AND checkin_date BETWEEN ? AND ?
+                        """,
+                        [user_id, *item_ids, days[0], days[-1]],
+                    ).fetchall()
+                    for row in checkin_rows:
+                        checkin = learning_plan_checkin_from_row(row)
+                        checkins_by_item_date[
+                            (checkin.item_id, checkin.checkin_date)
+                        ] = checkin
+
+            calendar_days: list[LearningCalendarDay] = []
+            for day in days:
+                day_plans: list[LearningCalendarPlan] = []
+                for plan in plans:
+                    if not plan_is_visible_on_date(plan, day):
+                        continue
+                    calendar_items = [
+                        LearningCalendarItem(
+                            item_id=item.item_id,
+                            subject=item.subject,
+                            title=item.title,
+                            estimated_minutes=item.estimated_minutes,
+                            checkin=checkins_by_item_date.get((item.item_id, day)),
+                        )
+                        for item in items_by_plan_id.get(plan.plan_id, [])
+                    ]
+                    if calendar_items:
+                        day_plans.append(
+                            LearningCalendarPlan(
+                                plan_id=plan.plan_id,
+                                title=plan.title,
+                                status=plan.status,
+                                items=calendar_items,
+                            )
+                        )
+                calendar_days.append(LearningCalendarDay(date=day, plans=day_plans))
+
+        return LearningCalendar(from_date=days[0], to_date=days[-1], days=calendar_days)
+
     def get_current_learning_plan(
         self,
         user_id: str,
@@ -1635,6 +1912,26 @@ def learning_plan_from_row(row: sqlite3.Row) -> LearningPlanRecord:
     )
 
 
+def learning_plan_summary_from_row(row: sqlite3.Row) -> LearningPlanSummary:
+    start_date = row["start_date"]
+    end_date = row["end_date"]
+    return LearningPlanSummary(
+        plan_id=str(row["plan_id"]),
+        user_id=str(row["user_id"]),
+        child_id=str(row["child_id"]),
+        title=str(row["title"]),
+        goal=str(row["goal"]),
+        status=str(row["status"]),
+        start_date=str(start_date) if start_date is not None else None,
+        end_date=str(end_date) if end_date is not None else None,
+        created_from_prompt=str(row["created_from_prompt"]),
+        item_count=int(row["item_count"]),
+        today_checkin_count=int(row["today_checkin_count"]),
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
+
+
 def learning_plan_item_from_row(row: sqlite3.Row) -> LearningPlanItemRecord:
     target_weakness_id = row["target_weakness_id"]
     return LearningPlanItemRecord(
@@ -1780,5 +2077,58 @@ def serialize_learning_plan(snapshot: LearningPlanSnapshot) -> dict[str, object]
                 ],
             }
             for item in snapshot.items
+        ],
+    }
+
+
+def serialize_learning_plan_summary(record: LearningPlanSummary) -> dict[str, object]:
+    return {
+        "planId": record.plan_id,
+        "userId": record.user_id,
+        "childId": record.child_id,
+        "title": record.title,
+        "goal": record.goal,
+        "status": record.status,
+        "startDate": record.start_date,
+        "endDate": record.end_date,
+        "createdFromPrompt": record.created_from_prompt,
+        "itemCount": record.item_count,
+        "todayCheckinCount": record.today_checkin_count,
+        "createdAt": record.created_at,
+        "updatedAt": record.updated_at,
+    }
+
+
+def serialize_learning_calendar(calendar: LearningCalendar) -> dict[str, object]:
+    return {
+        "from": calendar.from_date,
+        "to": calendar.to_date,
+        "days": [
+            {
+                "date": day.date,
+                "plans": [
+                    {
+                        "planId": plan.plan_id,
+                        "title": plan.title,
+                        "status": plan.status,
+                        "items": [
+                            {
+                                "itemId": item.item_id,
+                                "subject": item.subject,
+                                "title": item.title,
+                                "estimatedMinutes": item.estimated_minutes,
+                                "checkin": (
+                                    serialize_learning_plan_checkin(item.checkin)
+                                    if item.checkin is not None
+                                    else None
+                                ),
+                            }
+                            for item in plan.items
+                        ],
+                    }
+                    for plan in day.plans
+                ],
+            }
+            for day in calendar.days
         ],
     }

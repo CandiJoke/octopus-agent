@@ -11,7 +11,9 @@ from learning_store import (
     normalize_grade_value,
     normalize_title,
     serialize_child_profile,
+    serialize_learning_calendar,
     serialize_learning_plan,
+    serialize_learning_plan_summary,
     serialize_learning_weakness,
     utc_now,
 )
@@ -765,7 +767,172 @@ class LearningStoreTests(unittest.TestCase):
         self.store.update_learning_plan_status("user-a", second.plan.plan_id, "active")
 
         plans = self.store.list_learning_plans("user-a", status="active")
-        self.assertEqual({plan.plan_id for plan in plans}, {first.plan.plan_id, second.plan.plan_id})
+        self.assertEqual(
+            {plan.plan_id for plan in plans},
+            {first.plan.plan_id, second.plan.plan_id},
+        )
+
+    def test_learning_plan_summaries_include_parallel_plans_and_today_counts(self):
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="math",
+            category="calculation",
+            title="口算慢",
+            evidence="10 以内口算会停很久。",
+            severity="medium",
+        )
+        first = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="本周口算计划。",
+            start_date="2026-08-19",
+            end_date="2026-08-25",
+        )
+        second = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="周末专项计划。",
+            start_date="2026-08-19",
+            end_date="2026-08-21",
+        )
+        self.store.update_learning_plan_status("user-a", first.plan.plan_id, "active")
+        self.store.update_learning_plan_status("user-a", second.plan.plan_id, "active")
+        self.store.upsert_learning_plan_checkin(
+            "user-a",
+            first.plan.plan_id,
+            first.items[0].item_id,
+            checkin_date="2026-08-19",
+            status="done",
+        )
+
+        summaries = self.store.list_learning_plan_summaries(
+            "user-a",
+            today="2026-08-19",
+        )
+        payloads = [serialize_learning_plan_summary(summary) for summary in summaries]
+
+        self.assertEqual(len(payloads), 2)
+        self.assertEqual({item["status"] for item in payloads}, {"active"})
+        self.assertEqual({item["itemCount"] for item in payloads}, {1})
+        first_payload = next(
+            item for item in payloads if item["planId"] == first.plan.plan_id
+        )
+        second_payload = next(
+            item for item in payloads if item["planId"] == second.plan.plan_id
+        )
+        self.assertEqual(first_payload["todayCheckinCount"], 1)
+        self.assertEqual(second_payload["todayCheckinCount"], 0)
+
+    def test_get_learning_plan_returns_selected_plan_snapshot(self):
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            category="pinyin",
+            title="b/p/d/q 混淆",
+            evidence="拼读时经常混淆。",
+            severity="high",
+        )
+        first = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="第一份计划。",
+        )
+        second = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="第二份计划。",
+        )
+
+        snapshot = self.store.get_learning_plan("user-a", second.plan.plan_id)
+
+        self.assertEqual(snapshot.plan.plan_id, second.plan.plan_id)
+        self.assertNotEqual(snapshot.plan.plan_id, first.plan.plan_id)
+        self.assertEqual(snapshot.items[0].plan_id, second.plan.plan_id)
+
+    def test_learning_calendar_returns_range_items_and_selected_date_checkins(self):
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            category="pinyin",
+            title="b/p/d/q 混淆",
+            evidence="拼读时经常混淆。",
+            severity="high",
+        )
+        plan = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="一周拼音计划。",
+            start_date="2026-08-19",
+            end_date="2026-08-21",
+        )
+        self.store.update_learning_plan_status("user-a", plan.plan.plan_id, "active")
+        self.store.upsert_learning_plan_checkin(
+            "user-a",
+            plan.plan.plan_id,
+            plan.items[0].item_id,
+            checkin_date="2026-08-20",
+            status="partial",
+            note="完成一半。",
+        )
+
+        calendar = self.store.get_learning_calendar(
+            "user-a",
+            "2026-08-19",
+            "2026-08-21",
+            plan_id=plan.plan.plan_id,
+        )
+        payload = serialize_learning_calendar(calendar)
+
+        self.assertEqual(payload["from"], "2026-08-19")
+        self.assertEqual(payload["to"], "2026-08-21")
+        self.assertEqual(
+            [day["date"] for day in payload["days"]],
+            ["2026-08-19", "2026-08-20", "2026-08-21"],
+        )
+        day_with_checkin = payload["days"][1]
+        self.assertEqual(day_with_checkin["plans"][0]["planId"], plan.plan.plan_id)
+        item = day_with_checkin["plans"][0]["items"][0]
+        self.assertEqual(item["itemId"], plan.items[0].item_id)
+        self.assertEqual(item["checkin"]["status"], "partial")
+        self.assertEqual(item["checkin"]["checkinDate"], "2026-08-20")
+        self.assertIsNone(payload["days"][0]["plans"][0]["items"][0]["checkin"])
+
+    def test_learning_calendar_filters_plan_and_rejects_bad_ranges(self):
+        self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            subject="math",
+            category="calculation",
+            title="口算慢",
+            evidence="10 以内口算会停很久。",
+            severity="medium",
+        )
+        first = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="第一份计划。",
+        )
+        second = self.store.create_learning_plan_from_weaknesses(
+            "user-a",
+            created_from_prompt="第二份计划。",
+        )
+
+        filtered = self.store.get_learning_calendar(
+            "user-a",
+            "2026-08-19",
+            "2026-08-19",
+            plan_id=second.plan.plan_id,
+        )
+        payload = serialize_learning_calendar(filtered)
+        self.assertEqual(
+            [plan["planId"] for plan in payload["days"][0]["plans"]],
+            [second.plan.plan_id],
+        )
+        self.assertNotEqual(first.plan.plan_id, second.plan.plan_id)
+
+        with self.assertRaises(ValueError):
+            self.store.get_learning_calendar("user-a", "2026-08-22", "2026-08-19")
+
+        with self.assertRaises(ValueError):
+            self.store.get_learning_calendar("user-a", "2026/08/19", "2026-08-20")
+
+        with self.assertRaises(ValueError):
+            self.store.get_learning_calendar("user-a", "2026-08-01", "2026-09-05")
 
     def test_weakness_serializes_to_camel_case(self):
         record, _ = self.store.upsert_weakness(
