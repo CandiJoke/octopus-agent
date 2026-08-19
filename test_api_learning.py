@@ -86,6 +86,47 @@ class LearningApiTests(unittest.TestCase):
         listed = list_response.json()
         self.assertEqual([item["weaknessId"] for item in listed], [created["weaknessId"]])
 
+    def test_curriculum_endpoint_returns_grade_one_tree(self):
+        response = self.client.get("/curriculum/primary/grades/grade_1")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["schemaVersion"], "curriculum_tree.v1")
+        self.assertEqual(payload["grade"], "grade_1")
+        self.assertEqual(
+            [subject["subject"] for subject in payload["subjects"]],
+            ["chinese", "math", "english"],
+        )
+
+    def test_unsupported_curriculum_grade_returns_404(self):
+        response = self.client.get("/curriculum/primary/grades/grade_2")
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_create_weakness_can_link_observable_behavior(self):
+        response = self.client.post(
+            "/users/user-a/children/default/weaknesses",
+            json={
+                "category": "pinyin",
+                "title": "b/d 易混淆",
+                "evidence": "读拼音时经常把 b 看成 d。",
+                "severity": "medium",
+                "behaviorId": "chinese_g1_pinyin_initials_distinguish_bpdq",
+                "matchConfidence": 0.82,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["abilityId"], "chinese_g1_pinyin_initials")
+        self.assertEqual(
+            payload["behaviorId"],
+            "chinese_g1_pinyin_initials_distinguish_bpdq",
+        )
+        self.assertEqual(payload["matchConfidence"], 0.82)
+        self.assertEqual(payload["abilityTitle"], "声母辨认")
+        self.assertEqual(payload["behaviorTitle"], "能区分 b/p/d/q 的形和音")
+
     def test_created_weakness_uses_updated_primary_grade(self):
         self.client.patch(
             "/users/user-a/children/default/profile",

@@ -34,6 +34,24 @@ class RecordLearningWeaknessInput(BaseModel):
     severity: WeaknessSeverityInput = Field(
         description="严重程度。可用值：mild/轻微，medium/中等，high/明显。"
     )
+    ability_id: str | None = Field(
+        default=None,
+        description=(
+            "可选。匹配到的课标能力点 ID，例如 chinese_g1_pinyin_initials。"
+            "不确定时不要填写。"
+        ),
+    )
+    behavior_id: str | None = Field(
+        default=None,
+        description=(
+            "可选。匹配到的可观察表现 ID，例如 "
+            "chinese_g1_pinyin_initials_distinguish_bpdq。不确定时不要填写。"
+        ),
+    )
+    match_confidence: float | None = Field(
+        default=None,
+        description="可选。能力表现匹配置信度，0 到 1；不确定时不要填写。",
+    )
 
 
 def run(
@@ -42,6 +60,9 @@ def run(
     title: str,
     evidence: str,
     severity: WeaknessSeverityInput,
+    ability_id: str | None = None,
+    behavior_id: str | None = None,
+    match_confidence: float | None = None,
 ) -> str:
     context = current_learning_context()
     if context is None:
@@ -57,6 +78,9 @@ def run(
             evidence=evidence,
             severity=severity,
             source_run_id=context.source_run_id,
+            ability_id=ability_id,
+            behavior_id=behavior_id,
+            match_confidence=match_confidence,
         )
     except Exception:
         return "暂时无法记录薄弱点，请稍后重试。"

@@ -63,6 +63,32 @@ class LearningToolTests(unittest.TestCase):
         self.assertEqual(records[0].category, "pinyin")
         self.assertEqual(records[0].severity, "medium")
 
+    def test_chinese_tool_records_observable_behavior_reference(self):
+        with (
+            patch(
+                "tools.record_chinese_literacy_weakness."
+                "record_chinese_literacy_weakness.learning_store",
+                self.store,
+            ),
+            learning_run_context("user-a", "default", "run-chinese-behavior"),
+        ):
+            result = run_chinese(
+                category="拼音",
+                title="b/d 易混淆",
+                evidence="读拼音时经常把 b 看成 d。",
+                severity="中等",
+                behavior_id="chinese_g1_pinyin_initials_distinguish_bpdq",
+                match_confidence=0.82,
+            )
+
+        self.assertIn("已记录薄弱点", result)
+        records = self.store.list_weaknesses("user-a")
+        self.assertEqual(records[0].ability_id, "chinese_g1_pinyin_initials")
+        self.assertEqual(
+            records[0].behavior_id,
+            "chinese_g1_pinyin_initials_distinguish_bpdq",
+        )
+
     def test_general_tool_records_math_weakness_from_context(self):
         with (
             patch(
@@ -84,6 +110,32 @@ class LearningToolTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].source_run_id, "run-math")
         self.assertEqual(records[0].category, "calculation")
+
+    def test_general_tool_records_observable_behavior_reference(self):
+        with (
+            patch(
+                "tools.record_learning_weakness.record_learning_weakness.learning_store",
+                self.store,
+            ),
+            learning_run_context("user-a", "default", "run-behavior"),
+        ):
+            result = run_general(
+                subject="语文",
+                category="拼音",
+                title="b/d 易混淆",
+                evidence="读拼音时经常把 b 看成 d。",
+                severity="中等",
+                behavior_id="chinese_g1_pinyin_initials_distinguish_bpdq",
+                match_confidence=0.82,
+            )
+
+        self.assertIn("已记录薄弱点", result)
+        records = self.store.list_weaknesses("user-a")
+        self.assertEqual(records[0].ability_id, "chinese_g1_pinyin_initials")
+        self.assertEqual(
+            records[0].behavior_id,
+            "chinese_g1_pinyin_initials_distinguish_bpdq",
+        )
 
     def test_update_profile_tool_updates_grade_from_injected_context(self):
         with (

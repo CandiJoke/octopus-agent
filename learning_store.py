@@ -8,6 +8,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from curriculum_catalog import (
+    resolve_curriculum_ability,
+    resolve_curriculum_behavior,
+)
+
 
 DEFAULT_CHILD_ID = "default"
 DEFAULT_CHILD_DISPLAY_NAME = "孩子"
@@ -315,6 +320,9 @@ class LearningWeaknessRecord:
     severity: str
     status: str
     source_run_id: str | None
+    ability_id: str | None
+    behavior_id: str | None
+    match_confidence: float | None
     created_at: str
     updated_at: str
 
@@ -366,6 +374,52 @@ def normalize_severity_value(severity: str) -> str:
     if normalized is None:
         raise ValueError(f"unsupported weakness severity: {severity}")
     return normalized
+
+
+def normalize_optional_id(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(str(value).strip().split())
+    return normalized or None
+
+
+def normalize_match_confidence(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    normalized = float(value)
+    if normalized < 0 or normalized > 1:
+        raise ValueError("match confidence must be between 0 and 1")
+    return round(normalized, 2)
+
+
+def normalize_curriculum_reference(
+    grade: str,
+    subject: str,
+    ability_id: str | None = None,
+    behavior_id: str | None = None,
+    match_confidence: float | int | None = None,
+) -> tuple[str | None, str | None, float | None]:
+    ability_id = normalize_optional_id(ability_id)
+    behavior_id = normalize_optional_id(behavior_id)
+    normalized_confidence = normalize_match_confidence(match_confidence)
+
+    if normalized_confidence is not None and ability_id is None and behavior_id is None:
+        raise ValueError("match confidence requires curriculum reference")
+
+    try:
+        if behavior_id is not None:
+            behavior = resolve_curriculum_behavior(grade, subject, behavior_id)
+            if ability_id is not None and ability_id != behavior.ability_id:
+                raise ValueError("ability and behavior do not match")
+            return behavior.ability_id, behavior.behavior_id, normalized_confidence
+
+        if ability_id is not None:
+            ability = resolve_curriculum_ability(grade, subject, ability_id)
+            return ability.ability_id, None, normalized_confidence
+    except LookupError as exc:
+        raise ValueError(str(exc)) from exc
+
+    return None, None, normalized_confidence
 
 
 def sanitize_learning_text(text: str) -> str:
@@ -452,6 +506,9 @@ class LearningStore:
                 severity TEXT NOT NULL CHECK (severity IN ('mild', 'medium', 'high')),
                 status TEXT NOT NULL CHECK (status IN ('active', 'improving', 'resolved')),
                 source_run_id TEXT,
+                ability_id TEXT,
+                behavior_id TEXT,
+                match_confidence REAL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id, child_id)
@@ -469,6 +526,7 @@ class LearningStore:
             """
         )
         self._migrate_learning_weaknesses_schema(conn)
+        self._migrate_learning_curriculum_columns(conn)
         self._migrate_learning_grades(conn)
 
     def _migrate_learning_weaknesses_schema(self, conn: sqlite3.Connection) -> None:
@@ -518,6 +576,9 @@ class LearningStore:
                 severity TEXT NOT NULL CHECK (severity IN ('mild', 'medium', 'high')),
                 status TEXT NOT NULL CHECK (status IN ('active', 'improving', 'resolved')),
                 source_run_id TEXT,
+                ability_id TEXT,
+                behavior_id TEXT,
+                match_confidence REAL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(user_id, child_id)
@@ -530,12 +591,13 @@ class LearningStore:
                 INSERT INTO learning_weaknesses(
                 weakness_id, user_id, child_id, subject, grade, category,
                 title, normalized_title, evidence, severity, status,
-                source_run_id, created_at, updated_at
+                source_run_id, ability_id, behavior_id, match_confidence,
+                created_at, updated_at
                 )
                 SELECT
                 weakness_id, user_id, child_id, subject, grade, category,
                 title, normalized_title, evidence, severity, status,
-                source_run_id, created_at, updated_at
+                source_run_id, NULL, NULL, NULL, created_at, updated_at
                 FROM learning_weaknesses_old
                 """
             )
@@ -560,6 +622,18 @@ class LearningStore:
             raise
         else:
             conn.commit()
+
+    def _migrate_learning_curriculum_columns(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute("PRAGMA table_info(learning_weaknesses)").fetchall()
+        column_names = {str(row["name"]) for row in rows}
+        if "ability_id" not in column_names:
+            conn.execute("ALTER TABLE learning_weaknesses ADD COLUMN ability_id TEXT")
+        if "behavior_id" not in column_names:
+            conn.execute("ALTER TABLE learning_weaknesses ADD COLUMN behavior_id TEXT")
+        if "match_confidence" not in column_names:
+            conn.execute(
+                "ALTER TABLE learning_weaknesses ADD COLUMN match_confidence REAL"
+            )
 
     def _migrate_learning_grades(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -671,7 +745,8 @@ class LearningStore:
                 SELECT
                     weakness_id, user_id, child_id, subject, grade, category,
                     title, normalized_title, evidence, severity, status,
-                    source_run_id, created_at, updated_at
+                    source_run_id, ability_id, behavior_id, match_confidence,
+                    created_at, updated_at
                 FROM learning_weaknesses
                 WHERE user_id = ? AND child_id = ?
                 {where_status}
@@ -699,6 +774,9 @@ class LearningStore:
         severity: str,
         source_run_id: str | None = None,
         subject: str = DEFAULT_SUBJECT,
+        ability_id: str | None = None,
+        behavior_id: str | None = None,
+        match_confidence: float | int | None = None,
     ) -> tuple[LearningWeaknessRecord, bool]:
         subject = normalize_subject_value(subject)
         category = normalize_category_value(subject, category)
@@ -712,6 +790,13 @@ class LearningStore:
             raise ValueError("weakness evidence is required")
 
         profile = self.get_or_create_default_profile(user_id)
+        ability_id, behavior_id, match_confidence = normalize_curriculum_reference(
+            profile.grade,
+            subject,
+            ability_id=ability_id,
+            behavior_id=behavior_id,
+            match_confidence=match_confidence,
+        )
         now = utc_now()
         with self._connect() as conn:
             existing = conn.execute(
@@ -739,6 +824,9 @@ class LearningStore:
                         evidence = ?,
                         severity = ?,
                         source_run_id = ?,
+                        ability_id = COALESCE(?, ability_id),
+                        behavior_id = COALESCE(?, behavior_id),
+                        match_confidence = COALESCE(?, match_confidence),
                         updated_at = ?
                     WHERE user_id = ? AND weakness_id = ?
                     """,
@@ -747,6 +835,9 @@ class LearningStore:
                         safe_evidence,
                         severity,
                         source_run_id,
+                        ability_id,
+                        behavior_id,
+                        match_confidence,
                         now,
                         user_id,
                         weakness_id,
@@ -762,9 +853,10 @@ class LearningStore:
                     INSERT INTO learning_weaknesses(
                         weakness_id, user_id, child_id, subject, grade, category,
                         title, normalized_title, evidence, severity, status,
-                        source_run_id, created_at, updated_at
+                        source_run_id, ability_id, behavior_id, match_confidence,
+                        created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         weakness_id,
@@ -779,6 +871,9 @@ class LearningStore:
                         severity,
                         "active",
                         source_run_id,
+                        ability_id,
+                        behavior_id,
+                        match_confidence,
                         now,
                         now,
                     ),
@@ -812,6 +907,9 @@ class LearningStore:
                         evidence = ?,
                         severity = ?,
                         source_run_id = ?,
+                        ability_id = COALESCE(?, ability_id),
+                        behavior_id = COALESCE(?, behavior_id),
+                        match_confidence = COALESCE(?, match_confidence),
                         updated_at = ?
                     WHERE user_id = ? AND weakness_id = ?
                     """,
@@ -820,6 +918,9 @@ class LearningStore:
                         safe_evidence,
                         severity,
                         source_run_id,
+                        ability_id,
+                        behavior_id,
+                        match_confidence,
                         utc_now(),
                         user_id,
                         weakness_id,
@@ -861,7 +962,8 @@ class LearningStore:
             SELECT
                 weakness_id, user_id, child_id, subject, grade, category,
                 title, normalized_title, evidence, severity, status,
-                source_run_id, created_at, updated_at
+                source_run_id, ability_id, behavior_id, match_confidence,
+                created_at, updated_at
             FROM learning_weaknesses
             WHERE user_id = ? AND weakness_id = ?
             """,
@@ -885,6 +987,9 @@ def child_profile_from_row(row: sqlite3.Row) -> ChildProfileRecord:
 
 def learning_weakness_from_row(row: sqlite3.Row) -> LearningWeaknessRecord:
     source_run_id = row["source_run_id"]
+    ability_id = row["ability_id"]
+    behavior_id = row["behavior_id"]
+    match_confidence = row["match_confidence"]
     return LearningWeaknessRecord(
         weakness_id=str(row["weakness_id"]),
         user_id=str(row["user_id"]),
@@ -898,6 +1003,11 @@ def learning_weakness_from_row(row: sqlite3.Row) -> LearningWeaknessRecord:
         severity=str(row["severity"]),
         status=str(row["status"]),
         source_run_id=str(source_run_id) if source_run_id is not None else None,
+        ability_id=str(ability_id) if ability_id is not None else None,
+        behavior_id=str(behavior_id) if behavior_id is not None else None,
+        match_confidence=(
+            float(match_confidence) if match_confidence is not None else None
+        ),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
     )
@@ -931,4 +1041,31 @@ def serialize_learning_weakness(record: LearningWeaknessRecord) -> dict[str, obj
     }
     if record.source_run_id is not None:
         payload["sourceRunId"] = record.source_run_id
+    if record.ability_id is not None:
+        payload["abilityId"] = record.ability_id
+        try:
+            ability = resolve_curriculum_ability(
+                record.grade,
+                record.subject,
+                record.ability_id,
+            )
+        except LookupError:
+            pass
+        else:
+            payload["abilityTitle"] = ability.title
+    if record.behavior_id is not None:
+        payload["behaviorId"] = record.behavior_id
+        try:
+            behavior = resolve_curriculum_behavior(
+                record.grade,
+                record.subject,
+                record.behavior_id,
+            )
+        except LookupError:
+            pass
+        else:
+            payload["abilityTitle"] = behavior.ability_title
+            payload["behaviorTitle"] = behavior.behavior_title
+    if record.match_confidence is not None:
+        payload["matchConfidence"] = record.match_confidence
     return payload

@@ -47,6 +47,7 @@ class ToolsLoaderTests(unittest.TestCase):
         self.assertIn("拼音", schema_text)
         self.assertIn("medium", schema_text)
         self.assertIn("中等", schema_text)
+        self.assertIn("behavior_id", schema_text)
         self.assertNotIn("calculation", schema_text)
         self.assertNotIn("计算", schema_text)
 
@@ -61,6 +62,8 @@ class ToolsLoaderTests(unittest.TestCase):
         self.assertIn("英语", schema_text)
         self.assertIn("calculation", schema_text)
         self.assertIn("计算", schema_text)
+        self.assertIn("behavior_id", schema_text)
+        self.assertIn("match_confidence", schema_text)
 
     def test_update_child_profile_tool_schema_explains_primary_grades(self):
         update_tool = next(tool for tool in tools if tool.name == "update_child_profile")

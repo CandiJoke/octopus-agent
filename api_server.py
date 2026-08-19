@@ -28,6 +28,7 @@ from agent_console import (
 )
 from agent_context import AGENT_SYSTEM_PROMPT
 from capabilities import build_capability_catalog
+from curriculum_catalog import get_primary_grade_curriculum
 from history_store import (
     AgentRunEventRecord,
     AgentRunRecord,
@@ -46,6 +47,7 @@ from learning_store import (
     WeaknessCategoryInput,
     WeaknessSeverityInput,
     normalize_category_value,
+    normalize_grade_value,
     normalize_severity_value,
     normalize_subject_value,
     serialize_child_profile,
@@ -98,6 +100,18 @@ class LearningWeaknessRequest(BaseModel):
     title: str
     evidence: str
     severity: WeaknessSeverityInput
+    ability_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("abilityId", "ability_id"),
+    )
+    behavior_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("behaviorId", "behavior_id"),
+    )
+    match_confidence: float | None = Field(
+        default=None,
+        validation_alias=AliasChoices("matchConfidence", "match_confidence"),
+    )
     source_run_id: str | None = Field(
         default=None,
         validation_alias=AliasChoices("sourceRunId", "source_run_id"),
@@ -592,6 +606,15 @@ def get_skill_detail(skill_id: str):
     return serialize_skill_detail(skill)
 
 
+@app.get("/curriculum/primary/grades/{grade}")
+def get_primary_curriculum_grade(grade: LearningGradeInput):
+    try:
+        normalized_grade = normalize_grade_value(grade)
+        return get_primary_grade_curriculum(normalized_grade)
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/users/{user_id}/children/default/profile")
 def get_default_child_profile(
     user_id: str,
@@ -651,6 +674,9 @@ def record_child_weakness_for_subject(
             evidence=req.evidence,
             severity=severity,
             source_run_id=req.source_run_id,
+            ability_id=req.ability_id,
+            behavior_id=req.behavior_id,
+            match_confidence=req.match_confidence,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

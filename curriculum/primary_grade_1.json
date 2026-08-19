@@ -1,0 +1,345 @@
+{
+  "schemaVersion": "curriculum_tree.v1",
+  "stage": "primary",
+  "grade": "grade_1",
+  "gradeLabel": "一年级",
+  "subjects": [
+    {
+      "subject": "chinese",
+      "label": "语文",
+      "domains": [
+        {
+          "domainId": "chinese_g1_pinyin",
+          "title": "拼音与识字基础",
+          "abilities": [
+            {
+              "abilityId": "chinese_g1_pinyin_initials",
+              "title": "声母辨认",
+              "category": "pinyin",
+              "behaviors": [
+                {
+                  "behaviorId": "chinese_g1_pinyin_initials_distinguish_bpdq",
+                  "title": "能区分 b/p/d/q 的形和音",
+                  "evidenceExamples": ["把 b 看成 d", "拼读时 p 和 q 混淆"]
+                },
+                {
+                  "behaviorId": "chinese_g1_pinyin_initials_distinguish_flat_retroflex",
+                  "title": "能区分 z/c/s 和 zh/ch/sh/r",
+                  "evidenceExamples": ["平翘舌听辨困难", "拼读 zh/ch/sh 时读成 z/c/s"]
+                },
+                {
+                  "behaviorId": "chinese_g1_pinyin_initials_read_simple_syllables",
+                  "title": "能借助声母读出简单音节",
+                  "evidenceExamples": ["看到声母后不会和韵母拼合"]
+                }
+              ]
+            },
+            {
+              "abilityId": "chinese_g1_pinyin_tone_spelling",
+              "title": "音节与声调拼读",
+              "category": "pinyin",
+              "behaviors": [
+                {
+                  "behaviorId": "chinese_g1_pinyin_tone_spelling_read_marked_syllables",
+                  "title": "能按声调读准带调音节",
+                  "evidenceExamples": ["二声和三声混淆", "带调拼读不稳定"]
+                },
+                {
+                  "behaviorId": "chinese_g1_pinyin_tone_spelling_combine_initial_final",
+                  "title": "能把声母、韵母和声调合成完整读音",
+                  "evidenceExamples": ["会单读但不会拼成音节"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "domainId": "chinese_g1_literacy",
+          "title": "识字与书写",
+          "abilities": [
+            {
+              "abilityId": "chinese_g1_character_recognition_common",
+              "title": "常用字识记",
+              "category": "character_recognition",
+              "behaviors": [
+                {
+                  "behaviorId": "chinese_g1_character_recognition_match_sound_shape",
+                  "title": "能把常见汉字的字形和读音对应起来",
+                  "evidenceExamples": ["见过的字仍读不出"]
+                },
+                {
+                  "behaviorId": "chinese_g1_character_recognition_distinguish_similar",
+                  "title": "能区分一年级常见形近字",
+                  "evidenceExamples": ["把 日 和 目 混淆"]
+                },
+                {
+                  "behaviorId": "chinese_g1_character_recognition_read_in_context",
+                  "title": "能在词语和短句中认读已学汉字",
+                  "evidenceExamples": ["单字会读，放到句子里卡住"]
+                }
+              ]
+            },
+            {
+              "abilityId": "chinese_g1_writing_basic_strokes",
+              "title": "基本笔画与书写",
+              "category": "character_recognition",
+              "behaviors": [
+                {
+                  "behaviorId": "chinese_g1_writing_basic_strokes_follow_order",
+                  "title": "能按基本笔顺书写常见字",
+                  "evidenceExamples": ["倒笔顺", "漏笔画"]
+                },
+                {
+                  "behaviorId": "chinese_g1_writing_basic_strokes_keep_structure",
+                  "title": "能保持简单汉字的间架结构",
+                  "evidenceExamples": ["字写散", "部件位置颠倒"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "domainId": "chinese_g1_reading_expression",
+          "title": "朗读与表达",
+          "abilities": [
+            {
+              "abilityId": "chinese_g1_reading_aloud_short_text",
+              "title": "短文朗读",
+              "category": "reading",
+              "behaviors": [
+                {
+                  "behaviorId": "chinese_g1_reading_aloud_not_skip_words",
+                  "title": "能朗读短句时不明显漏字、添字",
+                  "evidenceExamples": ["朗读常漏字", "读短句时添字"]
+                },
+                {
+                  "behaviorId": "chinese_g1_reading_aloud_pause_by_punctuation",
+                  "title": "能根据逗号和句号做基本停顿",
+                  "evidenceExamples": ["一口气读完整段", "遇到句号不停顿"]
+                }
+              ]
+            },
+            {
+              "abilityId": "chinese_g1_expression_picture_sentence",
+              "title": "看图说话",
+              "category": "expression",
+              "behaviors": [
+                {
+                  "behaviorId": "chinese_g1_expression_picture_sentence_complete",
+                  "title": "能围绕图片说一句完整的话",
+                  "evidenceExamples": ["只说词语不成句"]
+                },
+                {
+                  "behaviorId": "chinese_g1_expression_picture_sentence_order",
+                  "title": "能按人物、地点、事情描述简单画面",
+                  "evidenceExamples": ["说话顺序混乱", "只说局部细节"]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "subject": "math",
+      "label": "数学",
+      "domains": [
+        {
+          "domainId": "math_g1_number_sense",
+          "title": "数与数量关系",
+          "abilities": [
+            {
+              "abilityId": "math_g1_number_sense_20",
+              "title": "20 以内数感",
+              "category": "number_sense",
+              "behaviors": [
+                {
+                  "behaviorId": "math_g1_number_sense_20_count_objects",
+                  "title": "能数出 20 以内物体数量",
+                  "evidenceExamples": ["数到十几后顺序混乱"]
+                },
+                {
+                  "behaviorId": "math_g1_number_sense_20_compare",
+                  "title": "能比较 20 以内两个数的大小",
+                  "evidenceExamples": ["比较 13 和 15 要反复数"]
+                },
+                {
+                  "behaviorId": "math_g1_number_sense_20_decompose_10",
+                  "title": "能说出 10 的常见分与合",
+                  "evidenceExamples": ["不知道 7 和 3 合成 10"]
+                }
+              ]
+            },
+            {
+              "abilityId": "math_g1_number_add_subtract_20",
+              "title": "20 以内加减法",
+              "category": "calculation",
+              "behaviors": [
+                {
+                  "behaviorId": "math_g1_number_add_subtract_20_add",
+                  "title": "能完成 20 以内加法计算",
+                  "evidenceExamples": ["加法总要数手指"]
+                },
+                {
+                  "behaviorId": "math_g1_number_add_subtract_20_subtract",
+                  "title": "能完成 20 以内减法计算",
+                  "evidenceExamples": ["减法容易倒着数错"]
+                },
+                {
+                  "behaviorId": "math_g1_number_add_subtract_20_explain_strategy",
+                  "title": "能说出凑十、拆数等简单计算思路",
+                  "evidenceExamples": ["只记答案，说不出怎么算"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "domainId": "math_g1_problem_solving",
+          "title": "简单数量问题",
+          "abilities": [
+            {
+              "abilityId": "math_g1_word_problem_one_step",
+              "title": "一步加减应用题",
+              "category": "word_problem",
+              "behaviors": [
+                {
+                  "behaviorId": "math_g1_word_problem_one_step_identify_operation",
+                  "title": "能判断简单情境用加法还是减法",
+                  "evidenceExamples": ["看到应用题不知道列加法还是减法"]
+                },
+                {
+                  "behaviorId": "math_g1_word_problem_one_step_write_expression",
+                  "title": "能根据题意写出一步加减算式",
+                  "evidenceExamples": ["会算但不会列式"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "domainId": "math_g1_geometry_position",
+          "title": "图形与位置",
+          "abilities": [
+            {
+              "abilityId": "math_g1_geometry_basic_shapes",
+              "title": "基本图形辨认",
+              "category": "geometry",
+              "behaviors": [
+                {
+                  "behaviorId": "math_g1_geometry_basic_shapes_recognize",
+                  "title": "能辨认长方形、正方形、三角形和圆",
+                  "evidenceExamples": ["正方形和长方形混淆"]
+                },
+                {
+                  "behaviorId": "math_g1_geometry_basic_shapes_classify",
+                  "title": "能按形状对简单图形分类",
+                  "evidenceExamples": ["分类时只看颜色不看形状"]
+                }
+              ]
+            },
+            {
+              "abilityId": "math_g1_position_relative",
+              "title": "相对位置",
+              "category": "geometry",
+              "behaviors": [
+                {
+                  "behaviorId": "math_g1_position_relative_describe",
+                  "title": "能描述上下、前后、左右等位置关系",
+                  "evidenceExamples": ["左右方向经常说反"]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "subject": "english",
+      "label": "英语",
+      "availability": "regional_optional",
+      "domains": [
+        {
+          "domainId": "english_g1_listening_phonics",
+          "title": "听辨与字母发音",
+          "abilities": [
+            {
+              "abilityId": "english_g1_letters_recognition",
+              "title": "字母识别",
+              "category": "phonics",
+              "behaviors": [
+                {
+                  "behaviorId": "english_g1_letters_recognition_upper_lower",
+                  "title": "能匹配常见大小写字母",
+                  "evidenceExamples": ["b 和 d 认反", "大小写对应不上"]
+                },
+                {
+                  "behaviorId": "english_g1_letters_recognition_say_letter_names",
+                  "title": "能说出常见字母名称",
+                  "evidenceExamples": ["看到字母说不出名称"]
+                }
+              ]
+            },
+            {
+              "abilityId": "english_g1_listening_classroom_words",
+              "title": "课堂词句听辨",
+              "category": "listening",
+              "behaviors": [
+                {
+                  "behaviorId": "english_g1_listening_classroom_words_follow_instruction",
+                  "title": "能听懂常见课堂指令",
+                  "evidenceExamples": ["听到 open your book 没反应"]
+                },
+                {
+                  "behaviorId": "english_g1_listening_classroom_words_identify_common",
+                  "title": "能听辨常见实物和颜色词",
+                  "evidenceExamples": ["听到 red/blue 反应慢"]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "domainId": "english_g1_speaking_vocabulary",
+          "title": "基础表达与词汇",
+          "abilities": [
+            {
+              "abilityId": "english_g1_speaking_greetings",
+              "title": "问候与自我介绍",
+              "category": "speaking",
+              "behaviors": [
+                {
+                  "behaviorId": "english_g1_speaking_greetings_respond",
+                  "title": "能回应 hello、good morning 等问候",
+                  "evidenceExamples": ["听到问候不知道回应"]
+                },
+                {
+                  "behaviorId": "english_g1_speaking_greetings_name",
+                  "title": "能用简单句说出自己的名字",
+                  "evidenceExamples": ["My name is 句式不会说"]
+                }
+              ]
+            },
+            {
+              "abilityId": "english_g1_vocabulary_common_topics",
+              "title": "常见主题词汇",
+              "category": "vocabulary",
+              "behaviors": [
+                {
+                  "behaviorId": "english_g1_vocabulary_common_topics_family_school",
+                  "title": "能认读家庭、学校等常见主题词",
+                  "evidenceExamples": ["family、school 等词隔天就忘"]
+                },
+                {
+                  "behaviorId": "english_g1_vocabulary_common_topics_match_picture",
+                  "title": "能把常见单词和图片对应起来",
+                  "evidenceExamples": ["看到图片不知道对应单词"]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
