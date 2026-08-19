@@ -1031,6 +1031,14 @@ class LearningStore:
             conn.commit()
             return self._get_weakness(conn, user_id, weakness_id)
 
+    def get_weakness(
+        self,
+        user_id: str,
+        weakness_id: str,
+    ) -> LearningWeaknessRecord:
+        with self._connect() as conn:
+            return self._get_weakness(conn, user_id, weakness_id)
+
     def _get_weakness(
         self,
         conn: sqlite3.Connection,

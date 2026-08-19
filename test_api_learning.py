@@ -171,6 +171,66 @@ class LearningApiTests(unittest.TestCase):
         self.assertEqual(payload["abilityTitle"], "复韵母辨认")
         self.assertEqual(payload["behaviorTitle"], "能区分 ui 和 iu 的形和音")
 
+    def test_generate_weakness_practice_returns_observable_behavior_training(self):
+        create_response = self.client.post(
+            "/users/user-a/children/default/weaknesses",
+            json={
+                "category": "pinyin",
+                "title": "ui 和 iu 不分",
+                "evidence": "读复韵母时经常把 ui 读成 iu。",
+                "severity": "medium",
+            },
+        )
+        weakness_id = create_response.json()["weaknessId"]
+
+        response = self.client.post(
+            f"/users/user-a/children/default/weaknesses/{weakness_id}/practice"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["weaknessId"], weakness_id)
+        self.assertEqual(
+            payload["behaviorId"],
+            "chinese_g1_pinyin_finals_distinguish_ui_iu",
+        )
+        self.assertEqual(payload["behaviorTitle"], "能区分 ui 和 iu 的形和音")
+        self.assertEqual(payload["abilityTitle"], "复韵母辨认")
+        self.assertEqual(payload["passingScore"], 3)
+        self.assertIn("连续答对", payload["passingCriteria"])
+        self.assertEqual(len(payload["questions"]), 4)
+        self.assertEqual(payload["questions"][0]["questionId"], "q1")
+        self.assertIn("ui", payload["questions"][0]["prompt"])
+        self.assertIn("iu", payload["questions"][0]["options"])
+        self.assertIn("ui", payload["questions"][0]["answer"])
+
+    def test_mark_weakness_status_updates_learning_profile(self):
+        create_response = self.client.post(
+            "/users/user-a/children/default/weaknesses",
+            json={
+                "category": "pinyin",
+                "title": "b/d 易混淆",
+                "evidence": "读拼音时经常把 b 看成 d。",
+                "severity": "medium",
+            },
+        )
+        weakness_id = create_response.json()["weaknessId"]
+
+        response = self.client.patch(
+            f"/users/user-a/children/default/weaknesses/{weakness_id}/status",
+            json={"status": "resolved"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["weaknessId"], weakness_id)
+        self.assertEqual(payload["status"], "resolved")
+
+        list_response = self.client.get("/users/user-a/children/default/weaknesses")
+        listed = list_response.json()
+        self.assertEqual(listed[0]["weaknessId"], weakness_id)
+        self.assertEqual(listed[0]["status"], "resolved")
+
     def test_created_weakness_uses_updated_primary_grade(self):
         self.client.patch(
             "/users/user-a/children/default/profile",

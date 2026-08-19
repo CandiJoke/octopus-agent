@@ -38,6 +38,7 @@ from history_store import (
     new_id,
 )
 from learning_context import current_learning_context, learning_run_context
+from learning_practice import generate_practice_set
 from learning_store import (
     DEFAULT_CHILD_ID,
     DEFAULT_SUBJECT,
@@ -46,6 +47,7 @@ from learning_store import (
     LearningSubjectInput,
     WeaknessCategoryInput,
     WeaknessSeverityInput,
+    WeaknessStatus,
     normalize_category_value,
     normalize_grade_value,
     normalize_severity_value,
@@ -122,6 +124,12 @@ class ChildProfileUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     grade: LearningGradeInput
+
+
+class LearningWeaknessStatusRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    status: WeaknessStatus
 
 
 # ========== 创建 Agent（带 Checkpointer 实现多轮记忆）==========
@@ -700,6 +708,37 @@ def record_default_child_subject_weakness(
     store: LearningStore = Depends(get_learning_store),
 ):
     return record_child_weakness_for_subject(user_id, subject, req, store)
+
+
+@app.post("/users/{user_id}/children/default/weaknesses/{weakness_id}/practice")
+def generate_default_child_weakness_practice(
+    user_id: str,
+    weakness_id: str,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        record = store.get_weakness(user_id, weakness_id)
+        return generate_practice_set(record)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.patch("/users/{user_id}/children/default/weaknesses/{weakness_id}/status")
+def update_default_child_weakness_status(
+    user_id: str,
+    weakness_id: str,
+    req: LearningWeaknessStatusRequest,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        record = store.update_weakness_status(user_id, weakness_id, req.status)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_learning_weakness(record)
 
 
 @app.post("/users/{user_id}/sessions")
