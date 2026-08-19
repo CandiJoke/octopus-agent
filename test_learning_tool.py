@@ -89,6 +89,32 @@ class LearningToolTests(unittest.TestCase):
             "chinese_g1_pinyin_initials_distinguish_bpdq",
         )
 
+    def test_chinese_tool_accepts_ui_iu_observable_behavior_reference(self):
+        with (
+            patch(
+                "tools.record_chinese_literacy_weakness."
+                "record_chinese_literacy_weakness.learning_store",
+                self.store,
+            ),
+            learning_run_context("user-a", "default", "run-chinese-ui-iu"),
+        ):
+            result = run_chinese(
+                category="拼音",
+                title="ui 和 iu 不分",
+                evidence="读复韵母时经常把 ui 读成 iu。",
+                severity="中等",
+                behavior_id="chinese_g1_pinyin_finals_distinguish_ui_iu",
+                match_confidence=0.82,
+            )
+
+        self.assertIn("已记录薄弱点", result)
+        records = self.store.list_weaknesses("user-a")
+        self.assertEqual(records[0].ability_id, "chinese_g1_pinyin_finals")
+        self.assertEqual(
+            records[0].behavior_id,
+            "chinese_g1_pinyin_finals_distinguish_ui_iu",
+        )
+
     def test_general_tool_records_math_weakness_from_context(self):
         with (
             patch(

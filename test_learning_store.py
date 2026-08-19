@@ -164,6 +164,28 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(payload["abilityTitle"], "声母辨认")
         self.assertEqual(payload["behaviorTitle"], "能区分 b/p/d/q 的形和音")
 
+    def test_upsert_weakness_infers_ui_iu_observable_behavior(self):
+        record, created = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            category="pinyin",
+            title="ui 和 iu 不分",
+            evidence="读复韵母时经常把 ui 读成 iu。",
+            severity="medium",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(record.ability_id, "chinese_g1_pinyin_finals")
+        self.assertEqual(
+            record.behavior_id,
+            "chinese_g1_pinyin_finals_distinguish_ui_iu",
+        )
+        self.assertEqual(record.match_confidence, 0.76)
+
+        payload = serialize_learning_weakness(record)
+        self.assertEqual(payload["abilityTitle"], "复韵母辨认")
+        self.assertEqual(payload["behaviorTitle"], "能区分 ui 和 iu 的形和音")
+
     def test_behavior_reference_derives_parent_ability(self):
         record, _ = self.store.upsert_weakness(
             "user-a",
@@ -435,6 +457,32 @@ class LearningStoreTests(unittest.TestCase):
                     old_created_at,
                 ),
             )
+            conn.execute(
+                """
+                INSERT INTO learning_weaknesses(
+                    weakness_id, user_id, child_id, subject, grade, category,
+                    title, normalized_title, evidence, severity, status,
+                    source_run_id, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "weakness_ui_iu",
+                    "user-a",
+                    DEFAULT_CHILD_ID,
+                    DEFAULT_SUBJECT,
+                    "first_grade",
+                    "pinyin",
+                    "ui 和 iu 不分",
+                    normalize_title("ui 和 iu 不分"),
+                    "读复韵母时经常把 ui 读成 iu。",
+                    "medium",
+                    "active",
+                    "run-old",
+                    old_created_at,
+                    old_created_at,
+                ),
+            )
             conn.commit()
 
         migrated_store = LearningStore(old_db_path)
@@ -459,7 +507,7 @@ class LearningStoreTests(unittest.TestCase):
         records = migrated_store.list_weaknesses("user-a")
         self.assertEqual(
             {item.weakness_id for item in records},
-            {"weakness_old", "weakness_bpdq", record.weakness_id},
+            {"weakness_old", "weakness_bpdq", "weakness_ui_iu", record.weakness_id},
         )
         grades_by_id = {item.weakness_id: item.grade for item in records}
         self.assertEqual(grades_by_id["weakness_old"], "grade_1")
@@ -474,6 +522,15 @@ class LearningStoreTests(unittest.TestCase):
             "chinese_g1_pinyin_initials_distinguish_bpdq",
         )
         self.assertEqual(bpdq_record.match_confidence, 0.76)
+        ui_iu_record = next(
+            item for item in records if item.weakness_id == "weakness_ui_iu"
+        )
+        self.assertEqual(ui_iu_record.ability_id, "chinese_g1_pinyin_finals")
+        self.assertEqual(
+            ui_iu_record.behavior_id,
+            "chinese_g1_pinyin_finals_distinguish_ui_iu",
+        )
+        self.assertEqual(ui_iu_record.match_confidence, 0.76)
 
     def test_sensitive_learning_text_is_redacted_before_storage(self):
         record, _ = self.store.upsert_weakness(

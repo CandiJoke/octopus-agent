@@ -27,6 +27,16 @@ class CurriculumCatalogTests(unittest.TestCase):
             "chinese_g1_pinyin_initials_distinguish_bpdq",
             [behavior["behaviorId"] for behavior in initials["behaviors"]],
         )
+        finals = next(
+            ability
+            for ability in pinyin["abilities"]
+            if ability["abilityId"] == "chinese_g1_pinyin_finals"
+        )
+        self.assertEqual(finals["abilityId"], "chinese_g1_pinyin_finals")
+        self.assertIn(
+            "chinese_g1_pinyin_finals_distinguish_ui_iu",
+            [behavior["behaviorId"] for behavior in finals["behaviors"]],
+        )
 
     def test_behavior_reference_resolves_parent_ability(self):
         behavior = resolve_curriculum_behavior(
@@ -40,6 +50,20 @@ class CurriculumCatalogTests(unittest.TestCase):
         self.assertEqual(behavior.ability_id, "chinese_g1_pinyin_initials")
         self.assertEqual(behavior.ability_title, "声母辨认")
         self.assertEqual(behavior.behavior_title, "能区分 b/p/d/q 的形和音")
+        self.assertEqual(behavior.category, "pinyin")
+
+    def test_final_behavior_reference_resolves_parent_ability(self):
+        behavior = resolve_curriculum_behavior(
+            "grade_1",
+            "chinese",
+            "chinese_g1_pinyin_finals_distinguish_ui_iu",
+        )
+
+        self.assertEqual(behavior.subject, "chinese")
+        self.assertEqual(behavior.grade, "grade_1")
+        self.assertEqual(behavior.ability_id, "chinese_g1_pinyin_finals")
+        self.assertEqual(behavior.ability_title, "复韵母辨认")
+        self.assertEqual(behavior.behavior_title, "能区分 ui 和 iu 的形和音")
         self.assertEqual(behavior.category, "pinyin")
 
     def test_ability_reference_resolves_without_behavior(self):

@@ -50,6 +50,18 @@
                   "evidenceExamples": ["会单读但不会拼成音节"]
                 }
               ]
+            },
+            {
+              "abilityId": "chinese_g1_pinyin_finals",
+              "title": "复韵母辨认",
+              "category": "pinyin",
+              "behaviors": [
+                {
+                  "behaviorId": "chinese_g1_pinyin_finals_distinguish_ui_iu",
+                  "title": "能区分 ui 和 iu 的形和音",
+                  "evidenceExamples": ["ui 和 iu 不分", "把 ui 读成 iu", "把 iu 写成 ui"]
+                }
+              ]
             }
           ]
         },

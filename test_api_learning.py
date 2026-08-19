@@ -149,6 +149,28 @@ class LearningApiTests(unittest.TestCase):
         self.assertEqual(payload["abilityTitle"], "声母辨认")
         self.assertEqual(payload["behaviorTitle"], "能区分 b/p/d/q 的形和音")
 
+    def test_create_weakness_infers_ui_iu_observable_behavior(self):
+        response = self.client.post(
+            "/users/user-a/children/default/weaknesses",
+            json={
+                "category": "pinyin",
+                "title": "ui 和 iu 不分",
+                "evidence": "读复韵母时经常把 ui 读成 iu。",
+                "severity": "medium",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["abilityId"], "chinese_g1_pinyin_finals")
+        self.assertEqual(
+            payload["behaviorId"],
+            "chinese_g1_pinyin_finals_distinguish_ui_iu",
+        )
+        self.assertEqual(payload["matchConfidence"], 0.76)
+        self.assertEqual(payload["abilityTitle"], "复韵母辨认")
+        self.assertEqual(payload["behaviorTitle"], "能区分 ui 和 iu 的形和音")
+
     def test_created_weakness_uses_updated_primary_grade(self):
         self.client.patch(
             "/users/user-a/children/default/profile",

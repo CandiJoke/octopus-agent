@@ -37,15 +37,16 @@ class RecordLearningWeaknessInput(BaseModel):
     ability_id: str | None = Field(
         default=None,
         description=(
-            "可选。匹配到的课标能力点 ID，例如 chinese_g1_pinyin_initials。"
-            "不确定时不要填写。"
+            "可选。匹配到的课标能力点 ID，例如 chinese_g1_pinyin_initials "
+            "或 chinese_g1_pinyin_finals。不确定时不要填写。"
         ),
     )
     behavior_id: str | None = Field(
         default=None,
         description=(
             "可选。匹配到的可观察表现 ID，例如 "
-            "chinese_g1_pinyin_initials_distinguish_bpdq。不确定时不要填写。"
+            "chinese_g1_pinyin_initials_distinguish_bpdq 或 "
+            "chinese_g1_pinyin_finals_distinguish_ui_iu。不确定时不要填写。"
         ),
     )
     match_confidence: float | None = Field(
