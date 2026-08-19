@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 from curriculum_catalog import (
+    infer_curriculum_behavior,
     resolve_curriculum_ability,
     resolve_curriculum_behavior,
 )
@@ -422,6 +423,34 @@ def normalize_curriculum_reference(
     return None, None, normalized_confidence
 
 
+def infer_missing_curriculum_reference(
+    grade: str,
+    subject: str,
+    category: str,
+    title: str,
+    evidence: str,
+    ability_id: str | None,
+    behavior_id: str | None,
+    match_confidence: float | None,
+) -> tuple[str | None, str | None, float | None]:
+    if behavior_id is not None:
+        return ability_id, behavior_id, match_confidence
+
+    match = infer_curriculum_behavior(grade, subject, category, title, evidence)
+    if match is None:
+        return ability_id, behavior_id, match_confidence
+
+    behavior = match.behavior
+    if ability_id is not None and ability_id != behavior.ability_id:
+        return ability_id, behavior_id, match_confidence
+
+    return (
+        behavior.ability_id,
+        behavior.behavior_id,
+        match_confidence if match_confidence is not None else match.confidence,
+    )
+
+
 def sanitize_learning_text(text: str) -> str:
     sanitized = " ".join(str(text).strip().split())
     for pattern, replacement in SENSITIVE_TEXT_REPLACEMENTS:
@@ -528,6 +557,7 @@ class LearningStore:
         self._migrate_learning_weaknesses_schema(conn)
         self._migrate_learning_curriculum_columns(conn)
         self._migrate_learning_grades(conn)
+        self._backfill_learning_curriculum_references(conn)
 
     def _migrate_learning_weaknesses_schema(self, conn: sqlite3.Connection) -> None:
         row = conn.execute(
@@ -652,6 +682,46 @@ class LearningStore:
             """,
             ("grade_1", "first_grade"),
         )
+
+    def _backfill_learning_curriculum_references(self, conn: sqlite3.Connection) -> None:
+        rows = conn.execute(
+            """
+            SELECT
+                weakness_id, grade, subject, category, title, evidence,
+                ability_id, behavior_id, match_confidence
+            FROM learning_weaknesses
+            WHERE behavior_id IS NULL
+            """
+        ).fetchall()
+        for row in rows:
+            ability_id, behavior_id, match_confidence = infer_missing_curriculum_reference(
+                grade=str(row["grade"]),
+                subject=str(row["subject"]),
+                category=str(row["category"]),
+                title=str(row["title"]),
+                evidence=str(row["evidence"]),
+                ability_id=(
+                    str(row["ability_id"]) if row["ability_id"] is not None else None
+                ),
+                behavior_id=(
+                    str(row["behavior_id"]) if row["behavior_id"] is not None else None
+                ),
+                match_confidence=(
+                    float(row["match_confidence"])
+                    if row["match_confidence"] is not None
+                    else None
+                ),
+            )
+            if behavior_id is None:
+                continue
+            conn.execute(
+                """
+                UPDATE learning_weaknesses
+                SET ability_id = ?, behavior_id = ?, match_confidence = ?
+                WHERE weakness_id = ?
+                """,
+                (ability_id, behavior_id, match_confidence, row["weakness_id"]),
+            )
 
     def get_or_create_default_profile(self, user_id: str) -> ChildProfileRecord:
         with self._connect() as conn:
@@ -796,6 +866,16 @@ class LearningStore:
             ability_id=ability_id,
             behavior_id=behavior_id,
             match_confidence=match_confidence,
+        )
+        ability_id, behavior_id, match_confidence = infer_missing_curriculum_reference(
+            profile.grade,
+            subject,
+            category,
+            safe_title,
+            safe_evidence,
+            ability_id,
+            behavior_id,
+            match_confidence,
         )
         now = utc_now()
         with self._connect() as conn:

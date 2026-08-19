@@ -142,6 +142,28 @@ class LearningStoreTests(unittest.TestCase):
         )
         self.assertEqual(payload["matchConfidence"], 0.82)
 
+    def test_upsert_weakness_infers_observable_behavior(self):
+        record, created = self.store.upsert_weakness(
+            "user-a",
+            DEFAULT_CHILD_ID,
+            category="pinyin",
+            title="b/d 易混淆",
+            evidence="读拼音时经常把 b 看成 d。",
+            severity="medium",
+        )
+
+        self.assertTrue(created)
+        self.assertEqual(record.ability_id, "chinese_g1_pinyin_initials")
+        self.assertEqual(
+            record.behavior_id,
+            "chinese_g1_pinyin_initials_distinguish_bpdq",
+        )
+        self.assertEqual(record.match_confidence, 0.76)
+
+        payload = serialize_learning_weakness(record)
+        self.assertEqual(payload["abilityTitle"], "声母辨认")
+        self.assertEqual(payload["behaviorTitle"], "能区分 b/p/d/q 的形和音")
+
     def test_behavior_reference_derives_parent_ability(self):
         record, _ = self.store.upsert_weakness(
             "user-a",
@@ -387,6 +409,32 @@ class LearningStoreTests(unittest.TestCase):
                     old_created_at,
                 ),
             )
+            conn.execute(
+                """
+                INSERT INTO learning_weaknesses(
+                    weakness_id, user_id, child_id, subject, grade, category,
+                    title, normalized_title, evidence, severity, status,
+                    source_run_id, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "weakness_bpdq",
+                    "user-a",
+                    DEFAULT_CHILD_ID,
+                    DEFAULT_SUBJECT,
+                    "first_grade",
+                    "pinyin",
+                    "b/d 易混淆",
+                    normalize_title("b/d 易混淆"),
+                    "读拼音时经常把 b 看成 d。",
+                    "medium",
+                    "active",
+                    "run-old",
+                    old_created_at,
+                    old_created_at,
+                ),
+            )
             conn.commit()
 
         migrated_store = LearningStore(old_db_path)
@@ -411,7 +459,7 @@ class LearningStoreTests(unittest.TestCase):
         records = migrated_store.list_weaknesses("user-a")
         self.assertEqual(
             {item.weakness_id for item in records},
-            {"weakness_old", record.weakness_id},
+            {"weakness_old", "weakness_bpdq", record.weakness_id},
         )
         grades_by_id = {item.weakness_id: item.grade for item in records}
         self.assertEqual(grades_by_id["weakness_old"], "grade_1")
@@ -419,6 +467,13 @@ class LearningStoreTests(unittest.TestCase):
         self.assertIsNone(old_record.ability_id)
         self.assertIsNone(old_record.behavior_id)
         self.assertIsNone(old_record.match_confidence)
+        bpdq_record = next(item for item in records if item.weakness_id == "weakness_bpdq")
+        self.assertEqual(bpdq_record.ability_id, "chinese_g1_pinyin_initials")
+        self.assertEqual(
+            bpdq_record.behavior_id,
+            "chinese_g1_pinyin_initials_distinguish_bpdq",
+        )
+        self.assertEqual(bpdq_record.match_confidence, 0.76)
 
     def test_sensitive_learning_text_is_redacted_before_storage(self):
         record, _ = self.store.upsert_weakness(
