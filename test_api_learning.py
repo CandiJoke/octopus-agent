@@ -430,6 +430,107 @@ class LearningApiTests(unittest.TestCase):
             "2026-08-19",
         )
 
+    def test_learning_plan_v2_api_lists_gets_and_returns_calendar(self):
+        self.client.post(
+            "/users/user-a/children/default/subjects/math/weaknesses",
+            json={
+                "category": "计算",
+                "title": "口算慢",
+                "evidence": "10 以内口算会停很久。",
+                "severity": "medium",
+            },
+        )
+        first = self.client.post(
+            "/users/user-a/children/default/learning-plans",
+            json={
+                "createdFromPrompt": "第一份计划。",
+                "startDate": "2026-08-19",
+                "endDate": "2026-08-25",
+            },
+        ).json()
+        second = self.client.post(
+            "/users/user-a/children/default/learning-plans",
+            json={
+                "createdFromPrompt": "第二份计划。",
+                "startDate": "2026-08-19",
+                "endDate": "2026-08-21",
+            },
+        ).json()
+        self.client.patch(
+            f"/users/user-a/children/default/learning-plans/{first['planId']}/status",
+            json={"status": "active"},
+        )
+        self.client.patch(
+            f"/users/user-a/children/default/learning-plans/{second['planId']}/status",
+            json={"status": "active"},
+        )
+        first_item_id = first["items"][0]["itemId"]
+        self.client.post(
+            (
+                "/users/user-a/children/default/learning-plans/"
+                f"{first['planId']}/items/{first_item_id}/checkins"
+            ),
+            json={"checkinDate": "2026-08-19", "status": "done"},
+        )
+
+        list_response = self.client.get(
+            "/users/user-a/children/default/learning-plans?status=active&limit=10"
+        )
+        self.assertEqual(list_response.status_code, 200)
+        summaries = list_response.json()
+        self.assertEqual(len(summaries), 2)
+        self.assertEqual({item["status"] for item in summaries}, {"active"})
+        self.assertEqual({item["itemCount"] for item in summaries}, {1})
+
+        detail_response = self.client.get(
+            f"/users/user-a/children/default/learning-plans/{second['planId']}"
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["planId"], second["planId"])
+
+        calendar_response = self.client.get(
+            (
+                "/users/user-a/children/default/learning-calendar"
+                f"?from=2026-08-19&to=2026-08-21&planId={first['planId']}"
+            )
+        )
+        self.assertEqual(calendar_response.status_code, 200)
+        calendar = calendar_response.json()
+        self.assertEqual(calendar["from"], "2026-08-19")
+        self.assertEqual(calendar["to"], "2026-08-21")
+        self.assertEqual(len(calendar["days"]), 3)
+        self.assertEqual(calendar["days"][0]["plans"][0]["planId"], first["planId"])
+        self.assertEqual(
+            calendar["days"][0]["plans"][0]["items"][0]["checkin"]["status"],
+            "done",
+        )
+        self.assertIsNone(calendar["days"][1]["plans"][0]["items"][0]["checkin"])
+
+    def test_learning_calendar_api_rejects_invalid_dates(self):
+        invalid_order = self.client.get(
+            (
+                "/users/user-a/children/default/learning-calendar"
+                "?from=2026-08-22&to=2026-08-19"
+            )
+        )
+        self.assertEqual(invalid_order.status_code, 422)
+
+        invalid_format = self.client.get(
+            (
+                "/users/user-a/children/default/learning-calendar"
+                "?from=2026/08/19&to=2026-08-20"
+            )
+        )
+        self.assertEqual(invalid_format.status_code, 422)
+
+        oversized = self.client.get(
+            (
+                "/users/user-a/children/default/learning-calendar"
+                "?from=2026-08-01&to=2026-09-05"
+            )
+        )
+        self.assertEqual(oversized.status_code, 422)
+
     def test_current_learning_plan_returns_null_when_empty(self):
         response = self.client.get(
             "/users/user-a/children/default/learning-plans/current"

@@ -11,7 +11,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langchain.agents import create_agent as create_langchain_agent
@@ -55,7 +55,9 @@ from learning_store import (
     normalize_severity_value,
     normalize_subject_value,
     serialize_child_profile,
+    serialize_learning_calendar,
     serialize_learning_plan,
+    serialize_learning_plan_summary,
     serialize_learning_weakness,
 )
 from tools import tools
@@ -778,6 +780,50 @@ def update_default_child_weakness_status(
     return serialize_learning_weakness(record)
 
 
+@app.get("/users/{user_id}/children/default/learning-plans")
+def list_default_child_learning_plans(
+    user_id: str,
+    status: LearningPlanStatus | None = None,
+    limit: int = 20,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        summaries = store.list_learning_plan_summaries(
+            user_id,
+            DEFAULT_CHILD_ID,
+            status=status,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return [serialize_learning_plan_summary(summary) for summary in summaries]
+
+
+@app.get("/users/{user_id}/children/default/learning-calendar")
+def get_default_child_learning_calendar(
+    user_id: str,
+    from_date: str = Query(alias="from"),
+    to_date: str = Query(alias="to"),
+    plan_id: str | None = Query(default=None, alias="planId"),
+    status: LearningPlanStatus | None = None,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        calendar = store.get_learning_calendar(
+            user_id,
+            from_date,
+            to_date,
+            DEFAULT_CHILD_ID,
+            plan_id=plan_id,
+            status=status,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return serialize_learning_calendar(calendar)
+
+
 @app.get("/users/{user_id}/children/default/learning-plans/current")
 def get_current_default_child_learning_plan(
     user_id: str,
@@ -786,6 +832,19 @@ def get_current_default_child_learning_plan(
     snapshot = store.get_current_learning_plan(user_id, DEFAULT_CHILD_ID)
     if snapshot is None:
         return None
+    return serialize_learning_plan(snapshot)
+
+
+@app.get("/users/{user_id}/children/default/learning-plans/{plan_id}")
+def get_default_child_learning_plan(
+    user_id: str,
+    plan_id: str,
+    store: LearningStore = Depends(get_learning_store),
+):
+    try:
+        snapshot = store.get_learning_plan(user_id, plan_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return serialize_learning_plan(snapshot)
 
 
